@@ -76,44 +76,22 @@ df['\\u5a74\\u513f\\u884c\\u4e3a\\u7279\\u5f81']  # No unicode escapes
 
 # 可视化规范（学术论文标准）
 
-## 全局配置（每个 notebook 开头必须设置）
+## 执行环境预配置（禁止重复设置）
+代码沙盒启动时已注入：`CJK_FONT`、`COLORS`、`DEFAULT_COLORS`、`FIG_SINGLE`、`FIG_DOUBLE`、`FIG_WIDE`、`FIG_SQUARE`，以及字体与 matplotlib 样式 rcParams。
+
+**严格禁止**在代码中调用 `sns.set_theme()` 或修改 `font.*` / `font.sans-serif` / `axes.unicode_minus`（否则会覆盖中文字体导致方框）。
+
+绑图时直接使用预置变量，示例：
 ```python
 import matplotlib.pyplot as plt
 import seaborn as sns
-sns.set_theme(style='ticks')
 
-plt.rcParams.update({{
-    'font.family': 'sans-serif',
-    'font.size': 11,
-    'axes.titlesize': 12,
-    'axes.titleweight': 'bold',
-    'axes.labelsize': 11,
-    'axes.linewidth': 1.2,
-    'axes.spines.top': False,
-    'axes.spines.right': False,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'legend.fontsize': 10,
-    'legend.frameon': False,
-    'figure.dpi': 300,
-    'savefig.dpi': 300,
-    'savefig.bbox': 'tight',
-    'savefig.pad_inches': 0.1,
-}})
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Noto Sans CJK SC', 'Noto Sans SC', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
-
-COLORS = {{
-    'primary': '#2E5B88',
-    'secondary': '#E85D4C',
-    'tertiary': '#4A9B7F',
-    'neutral': '#7F7F7F',
-    'light': '#B8D4E8',
-}}
-FIG_SINGLE = (5, 4)
-FIG_DOUBLE = (10, 4)
-FIG_WIDE = (8, 3)
-FIG_SQUARE = (6, 6)
+fig, ax = plt.subplots(figsize=FIG_SINGLE)
+sns.lineplot(x=x, y=y, ax=ax, color=COLORS['primary'])
+ax.set_xlabel('时间 (月)')
+ax.set_ylabel('产量 (吨)')
+plt.savefig('trend.png', dpi=300, bbox_inches='tight')
+plt.close()
 ```
 
 ## 图表类型选择

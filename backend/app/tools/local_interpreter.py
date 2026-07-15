@@ -1,6 +1,7 @@
 """本地代码解释器模块，通过本地 Jupyter 内核执行 Python 代码。"""
 
 from app.tools.base_interpreter import BaseCodeInterpreter
+from app.tools.matplotlib_setup import build_matplotlib_init_code
 from app.tools.notebook_serializer import NotebookSerializer
 import jupyter_client
 from app.utils.log_util import logger
@@ -40,35 +41,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self._pre_execute_code()
 
     def _pre_execute_code(self):
-        init_code = (
-            f"import os\n"
-            f"work_dir = r'{self.work_dir}'\n"
-            f"os.makedirs(work_dir, exist_ok=True)\n"
-            f"os.chdir(work_dir)\n"
-            f"print('当前工作目录:', os.getcwd())\n"
-            # 加载中文字体，确保图表中文正常显示（跨平台兼容）
-            # 先清除 matplotlib 字体缓存，避免旧缓存导致 addfont 失效
-            f"import matplotlib\n"
-            f"import matplotlib.pyplot as plt\n"
-            f"from matplotlib import font_manager\n"
-            f"import glob as _glob, pathlib as _pl\n"
-            f"_cache_dir = _pl.Path(matplotlib.get_cachedir())\n"
-            f"for _cache_file in _glob.glob(str(_cache_dir / 'fontlist*.json')):\n"
-            f"    _pl.Path(_cache_file).unlink(missing_ok=True)\n"
-            f"font_manager.fontManager.__init__()\n"
-            f"_font_dir = work_dir\n"
-            f"_loaded = False\n"
-            f"for _f in os.listdir(_font_dir):\n"
-            f"    if _f.lower().endswith(('.ttf', '.otf', '.ttc')):\n"
-            f"        _fp = os.path.join(_font_dir, _f)\n"
-            f"        font_manager.fontManager.addfont(_fp)\n"
-            f"        _loaded = True\n"
-            f"if _loaded:\n"
-            f"    print(f'中文字体已加载，可用字体数: {{len(font_manager.fontManager.ttflist)}}')\n"
-            f"plt.rcParams['font.sans-serif'] = ['SimHei', 'Heiti SC', 'STHeiti', 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'WenQuanYi Micro Hei', 'Microsoft YaHei', 'sans-serif']\n"
-            f"plt.rcParams['axes.unicode_minus'] = False\n"
-            f"plt.rcParams['font.family'] = 'sans-serif'\n"
-        )
+        init_code = build_matplotlib_init_code(self.work_dir)
         self.execute_code_(init_code)
 
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
