@@ -38,11 +38,32 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.km, self.kc = jupyter_client.manager.start_new_kernel(
             kernel_name="python3", env=kernel_env
         )
-        self._pre_execute_code()
+        font_msg, font_type = self._pre_execute_code()
+        if font_msg:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=font_msg, type=font_type),
+            )
 
-    def _pre_execute_code(self):
+    def _pre_execute_code(self) -> tuple[str | None, str]:
+        """执行 matplotlib 初始化，并解析字体加载结果供前端展示。
+
+        Returns:
+            (消息文案, SystemMessage.type)；无可用信息时文案为 None。
+        """
         init_code = build_matplotlib_init_code(self.work_dir)
-        self.execute_code_(init_code)
+        execution = self.execute_code_(init_code)
+        stdout = "\n".join(text for mark, text in execution if mark == "stdout")
+        for line in stdout.splitlines():
+            line = line.strip()
+            if "中文字体已加载" in line:
+                # 去掉日志前缀，前端只展示关键结论
+                content = line.removeprefix("[matplotlib_setup] ").strip()
+                return content, "success"
+            if "未找到中文字体" in line:
+                content = line.removeprefix("[matplotlib_setup] ").strip()
+                return content, "warning"
+        return None, "info"
 
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
         logger.info(f"执行代码: {code}")

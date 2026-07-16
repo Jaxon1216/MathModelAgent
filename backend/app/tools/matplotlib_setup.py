@@ -40,17 +40,18 @@ def build_matplotlib_init_code(
     fig_wide = repr(FIG_WIDE)
     fig_square = repr(FIG_SQUARE)
 
-    chdir_block = ""
+    # 必须先解析为绝对路径：相对 work_dir 在 os.chdir 之后会导致 listdir/addfont 失败
+    chdir_block = (
+        "import os\n"
+        f"work_dir = os.path.abspath(r'{work_dir}')\n"
+        f"_font_dir = os.path.abspath(r'{font_dir}')\n"
+    )
     if setup_chdir:
-        chdir_block = (
-            f"import os\n"
-            f"work_dir = r'{work_dir}'\n"
-            f"os.makedirs(work_dir, exist_ok=True)\n"
-            f"os.chdir(work_dir)\n"
-            f"print('[matplotlib_setup] 当前工作目录:', os.getcwd())\n"
+        chdir_block += (
+            "os.makedirs(work_dir, exist_ok=True)\n"
+            "os.chdir(work_dir)\n"
+            "print('[matplotlib_setup] 当前工作目录:', os.getcwd())\n"
         )
-    else:
-        chdir_block = "import os\n"
 
     return (
         chdir_block
@@ -58,7 +59,6 @@ def build_matplotlib_init_code(
         + "import matplotlib.pyplot as plt\n"
         + "from matplotlib import font_manager\n"
         + "import glob as _glob, pathlib as _pl\n"
-        + f"_font_dir = r'{font_dir}'\n"
         + "_cache_dir = _pl.Path(matplotlib.get_cachedir())\n"
         + "for _cache_file in _glob.glob(str(_cache_dir / 'fontlist*.json')):\n"
         + "    _pl.Path(_cache_file).unlink(missing_ok=True)\n"
