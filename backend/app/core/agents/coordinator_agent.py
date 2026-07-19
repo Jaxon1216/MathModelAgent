@@ -9,6 +9,8 @@ import re
 from app.utils.log_util import logger
 from app.schemas.A2A import CoordinatorToModeler
 
+MAX_JSON_RETRIES = 3
+
 
 class CoordinatorAgent(Agent):
     """协调者 Agent，判断用户输入是否为数学建模问题并拆解为结构化问题列表。"""
@@ -36,7 +38,8 @@ class CoordinatorAgent(Agent):
         )
         await self.append_chat_history({"role": "user", "content": ques_all})
         attempt = 0
-        while True:
+        last_error: Exception | None = None
+        while attempt < MAX_JSON_RETRIES:
             try:
                 response = await self._chat(
                     history=self.chat_history,
@@ -58,7 +61,8 @@ class CoordinatorAgent(Agent):
 
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 attempt += 1
-                logger.warning(f"解析失败 (尝试 {attempt}): {str(e)}")
+                last_error = e
+                logger.warning(f"解析失败 (尝试 {attempt}/{MAX_JSON_RETRIES}): {str(e)}")
 
                 # 添加错误反馈提示
                 error_prompt = f"⚠️ 上次响应格式错误: {str(e)}。请严格输出JSON格式"
@@ -66,3 +70,5 @@ class CoordinatorAgent(Agent):
                     "role": "system",
                     "content": self.system_prompt + "\n" + error_prompt
                 })
+
+        raise last_error or ValueError("CoordinatorAgent JSON 解析重试次数耗尽")

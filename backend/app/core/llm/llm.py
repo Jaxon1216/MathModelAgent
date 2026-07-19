@@ -21,6 +21,10 @@ from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
 
 
+class LLMConfigError(RuntimeError):
+    """LLM 配置缺失时抛出，与 JSON 解析的 ValueError 区分开，避免被重试循环误捕获。"""
+
+
 class LLM:
     """大语言模型封装类，提供对话调用、重试和工具调用验证功能。"""
 
@@ -56,9 +60,9 @@ class LLM:
     def _validate_config(self, agent_name: str) -> None:
         """验证 LLM 配置是否完整。"""
         if not self.model or not str(self.model).strip():
-            raise ValueError(f"{agent_name} 未配置模型 ID，请设置对应的 *_MODEL")
+            raise LLMConfigError(f"{agent_name} 未配置模型 ID，请设置对应的 *_MODEL")
         if not self.api_key or not str(self.api_key).strip():
-            raise ValueError(f"{agent_name} 未配置 API Key，请设置对应的 *_API_KEY")
+            raise LLMConfigError(f"{agent_name} 未配置 API Key，请设置对应的 *_API_KEY")
 
     async def chat(
         self,

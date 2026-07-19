@@ -10,6 +10,8 @@ import json
 import re
 from icecream import ic  # type: ignore[import-unresolved]
 
+MAX_JSON_RETRIES = 3
+
 
 def repair_json(json_str: str) -> dict | None:
     """尝试修复 LLM 输出的格式错误的 JSON。
@@ -84,7 +86,7 @@ class ModelerAgent(Agent):
         )
 
         attempt = 0
-        while True:
+        while attempt < MAX_JSON_RETRIES:
             response = await self._chat(
                 history=self.chat_history,
                 agent_name=self.__class__.__name__,
@@ -101,7 +103,7 @@ class ModelerAgent(Agent):
 
             attempt += 1
             logger.warning(
-                f"JSON 解析失败 (第{attempt}次)，请求模型重新生成"
+                f"JSON 解析失败 (第{attempt}/{MAX_JSON_RETRIES}次)，请求模型重新生成"
             )
             retry_msg: dict = {"role": "assistant", "content": json_str}
             if response.reasoning_content:
@@ -113,3 +115,5 @@ class ModelerAgent(Agent):
                     "content": "你返回的JSON格式有误，请严格按照JSON格式重新输出，注意字符串值内的双引号必须转义为\\\"，不要包含未转义的特殊字符。",
                 }
             )
+
+        raise ValueError("ModelerAgent JSON 解析重试次数耗尽")

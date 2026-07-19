@@ -136,18 +136,16 @@ const saveToStore = async () => {
 	apiKeyStore.setCoderConfig(form.value.coder);
 	apiKeyStore.setWriterConfig(form.value.writer);
 	apiKeyStore.setOpenalexEmail(form.value.openalex_email);
-	if (allValid.value) {
-		try {
-			await saveApiConfig({
-				coordinator: form.value.coordinator,
-				modeler: form.value.modeler,
-				coder: form.value.coder,
-				writer: form.value.writer,
-				openalex_email: form.value.openalex_email,
-			});
-		} catch (error) {
-			console.error("保存配置到后端失败:", error);
-		}
+	try {
+		await saveApiConfig({
+			coordinator: form.value.coordinator,
+			modeler: form.value.modeler,
+			coder: form.value.coder,
+			writer: form.value.writer,
+			openalex_email: form.value.openalex_email,
+		});
+	} catch (error) {
+		console.error("保存配置到后端失败:", error);
 	}
 };
 
