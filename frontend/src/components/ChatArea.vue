@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useStickyScroll } from "@/composables/useStickyScroll";
 import type { Message } from "@/utils/response";
 import { Send } from "lucide-vue-next";
 import { ref } from "vue";
@@ -17,6 +18,10 @@ const inputValue = ref("");
 const inputRef = ref<HTMLInputElement | null>(null);
 const scrollRef = ref<HTMLDivElement | null>(null);
 
+// ---- Scroll ----
+
+const { onScroll } = useStickyScroll(scrollRef, () => props.messages);
+
 // ---- Methods ----
 
 /** 发送消息（本地处理） */
@@ -29,7 +34,7 @@ const sendMessage = () => {
 
 <template>
   <div class="flex h-full flex-col p-3">
-    <div ref="scrollRef" class="flex-1 overflow-y-auto">
+    <div ref="scrollRef" class="flex-1 overflow-y-auto" @scroll="onScroll">
       <template v-for="message in props.messages" :key="message.id">
         <div class="mb-3">
           <!-- 用户消息 -->

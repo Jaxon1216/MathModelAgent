@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import NotebookCell from "@/components/NotebookCell.vue";
+import { useStickyScroll } from "@/composables/useStickyScroll";
 import { useTaskStore } from "@/stores/task";
 import type { CodeCell, NoteCell, ResultCell } from "@/utils/interface";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
 // ---- Reactive State ----
 
 const taskStore = useTaskStore();
+const scrollRef = ref<HTMLDivElement | null>(null);
 
 // ---- Computed ----
 
@@ -39,10 +41,14 @@ const cells = computed<NoteCell[]>(() => {
 
 	return notebookCells;
 });
+
+// ---- Scroll ----
+
+const { onScroll } = useStickyScroll(scrollRef, () => cells.value);
 </script>
 
 <template>
-  <div class="flex-1 px-1 pt-1 pb-4 h-full overflow-y-auto">
+  <div ref="scrollRef" class="flex-1 px-1 pt-1 pb-4 h-full overflow-y-auto" @scroll="onScroll">
     <!-- 遍历所有单元格 -->
     <div v-for="(cell, index) in cells" :key="index" :class="[
       'transform transition-all duration-200 hover:shadow-lg',
