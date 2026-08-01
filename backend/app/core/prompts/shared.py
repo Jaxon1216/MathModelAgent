@@ -42,22 +42,24 @@ def get_completion_check_prompt(prompt, text_to_gpt) -> str:
         完成检查提示词字符串。
     """
     return f"""
-Please analyze the current state and determine if the task is fully completed:
+Please review whether the current subtask is fully completed.
 
-Original task: {prompt}
+Original task:
+{prompt}
 
 Latest execution results:
-{text_to_gpt}  # 修改：使用合并后的结果
+{text_to_gpt}
 
-Consider:
-1. Have all required data processing steps been completed?
-2. Have all necessary files been saved?
-3. Are there any remaining steps needed?
-4. Is the output satisfactory and complete?
-5. 如果一个任务反复无法完成，尝试切换路径、简化路径或直接跳过，千万别陷入反复重试，导致死循环。
-6. 尽量在较少的对话轮次内完成任务
-7. If the task is complete, please provide a short summary of what was accomplished and don't call function tool.
-8. If the task is not complete, please rethink how to do and call function tool
-9. Don't ask user any thing about how to do and next to do,just do it by yourself
-10. have a good visualization?
+Check the following:
+1. Have all required data processing and modeling steps been completed?
+2. Have all figures been saved (check that .png files were actually created)?
+3. Has each figure been followed by a print() of its key data features?
+4. Have all necessary result files been saved?
+5. Is there a final summary print with model type, core metrics, and conclusions?
+
+Decision rules:
+- If everything above is done → respond with a brief summary of what was accomplished. Do NOT call any tool.
+- If something is missing → call the appropriate tool to complete it. Do not ask the user, just do it.
+- If a task repeatedly fails → switch approach, simplify, or skip. Never enter an infinite retry loop.
+- Keep total conversation turns minimal.
 """
