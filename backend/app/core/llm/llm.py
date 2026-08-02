@@ -25,6 +25,27 @@ class LLMConfigError(RuntimeError):
     """LLM 配置缺失时抛出，与 JSON 解析的 ValueError 区分开，避免被重试循环误捕获。"""
 
 
+class LLMContentRejectedError(RuntimeError):
+    """API 内容审核/不可重试的 4xx 错误，应立即失败而非无限重试。"""
+
+
+def _is_non_retryable_llm_error(exc: Exception) -> bool:
+    """判断是否为不应重试的错误（重试也不会成功）。"""
+    if isinstance(exc, LLMConfigError):
+        return True
+    msg = str(exc).lower()
+    markers = (
+        "content exists risk",
+        "invalid_request_error",
+        "invalid api key",
+        "authentication",
+        "permission denied",
+        "model not found",
+        "context length",
+    )
+    return any(marker in msg for marker in markers)
+
+
 class LLM:
     """大语言模型封装类，提供对话调用、重试和工具调用验证功能。"""
 
@@ -101,6 +122,11 @@ class LLM:
                 await self.send_message(response, agent_name, sub_title)
                 return response
             except Exception as e:
+                if _is_non_retryable_llm_error(e):
+                    logger.error(f"LLM 不可重试错误，立即失败: {e}")
+                    if "content exists risk" in str(e).lower():
+                        raise LLMContentRejectedError(str(e)) from e
+                    raise
                 attempt += 1
                 logger.error(f"第{attempt}次重试: {str(e)}")
                 if max_retries is not None and attempt >= max_retries:
