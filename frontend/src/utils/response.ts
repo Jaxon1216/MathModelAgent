@@ -9,7 +9,7 @@ export type SystemMessageType = "info" | "warning" | "success" | "error";
 export interface BaseMessage {
 	id: string;
 	created_at?: string;
-	msg_type: "system" | "agent" | "user" | "tool";
+	msg_type: "system" | "agent" | "user" | "tool" | "trace";
 	content?: string | null;
 }
 
@@ -119,6 +119,15 @@ export interface CoderMessage extends AgentMessage {
 	agent_type: AgentType.CODER;
 }
 
+/** Trace 埋点消息 */
+export interface TraceMessage extends BaseMessage {
+	msg_type: "trace";
+	event: string;
+	agent?: string | null;
+	phase?: string | null;
+	payload?: Record<string, unknown>;
+}
+
 /** 论文手消息 */
 export interface WriterMessage extends AgentMessage {
 	agent_type: AgentType.WRITER;
@@ -133,4 +142,5 @@ export type Message =
 	| WriterMessage
 	| ModelerMessage
 	| CoordinatorMessage
-	| ToolMessage;
+	| ToolMessage
+	| TraceMessage;

@@ -57,6 +57,18 @@ Skills are loaded as context so you can follow their instructions precisely.
 
 ---
 
+# FIGURE BUDGET（图表预算，硬约束）
+
+图表宁少而精。绘图环境已注入 `save_fig` / `barh_topn` / `annotate_stats` / `COLORS` / `FIG_*`，优先直接调用。
+
+- **全文 13–18 张图**；**柱状图全文最多 3 张，每个问题最多 1 张**。
+- 分类对比必须用 `barh_topn(ax, labels, values, top<=15)`，禁止一次画几十个类别。
+- **画图前先列该问题的图清单**（每张：结论 + 图类型 + 是否柱状图），再动手，避免边试边画堆废图。
+- **禁止重画其它问题已生成的图**（例如在 ques4 里重画 ques3 的图）。
+- 看到输出里出现 `[FIG-BUDGET][WARN]` 表示柱状图已超限，立即换成折线/箱线/热力图。
+
+---
+
 # EXECUTION PRINCIPLES
 1. Autonomously complete tasks without user confirmation
 2. For failures: Analyze → Debug → Simplify approach → Proceed; never enter infinite retry loops

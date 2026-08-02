@@ -1,22 +1,27 @@
 """本地代码解释器模块，通过本地 Jupyter 内核执行 Python 代码。"""
 
-from app.tools.base_interpreter import BaseCodeInterpreter
-from app.tools.matplotlib_setup import build_matplotlib_init_code
-from app.tools.notebook_serializer import NotebookSerializer
-import jupyter_client
-from app.utils.log_util import logger
 import os
-from app.services.redis_manager import redis_manager
+import time
+
+import jupyter_client
+
 from app.schemas.response import (
     OutputItem,
     ResultModel,
     StdErrModel,
     SystemMessage,
 )
+from app.services.redis_manager import redis_manager
+from app.services.trace_recorder import trace_recorder
+from app.tools.base_interpreter import BaseCodeInterpreter
+from app.tools.matplotlib_setup import build_matplotlib_init_code
+from app.tools.notebook_serializer import NotebookSerializer
+from app.utils.log_util import logger
 
 
 class LocalCodeInterpreter(BaseCodeInterpreter):
     """基于本地 Jupyter 内核的代码解释器。"""
+
     def __init__(
         self,
         task_id: str,
@@ -67,6 +72,16 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
         logger.info(f"执行代码: {code}")
+        before_artifacts = self._snapshot_artifacts()
+        code_lines = code.count("\n") + 1 if code else 0
+        await trace_recorder.emit(
+            self.task_id,
+            "execute.start",
+            agent=self.__class__.__name__,
+            code_lines=code_lines,
+        )
+        started_at = time.monotonic()
+
         #  添加代码到notebook
         self.notebook_serializer.add_code_cell_to_notebook(code)
 
@@ -136,11 +151,55 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
         await self._push_to_websocket(content_to_display)
 
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        after_artifacts = self._snapshot_artifacts()
+        new_artifacts = after_artifacts - before_artifacts
+        await trace_recorder.emit(
+            self.task_id,
+            "execute.done",
+            agent=self.__class__.__name__,
+            code_lines=code_lines,
+            duration_ms=duration_ms,
+            error=error_message if error_occurred else None,
+            stdout_len=len(combined_text),
+            new_artifacts=len(new_artifacts),
+        )
+        for artifact_path in sorted(new_artifacts):
+            await trace_recorder.emit(
+                self.task_id,
+                "artifact.created",
+                agent=self.__class__.__name__,
+                path=artifact_path,
+                kind=self._artifact_kind(artifact_path),
+            )
+
         return (
             combined_text,
             error_occurred,
             error_message,
         )
+
+    @staticmethod
+    def _artifact_kind(filename: str) -> str:
+        """根据扩展名返回 artifact 类型。"""
+        lower = filename.lower()
+        if lower.endswith(".png"):
+            return "png"
+        if lower.endswith(".csv"):
+            return "csv"
+        if lower.endswith(".npy"):
+            return "npy"
+        return "other"
+
+    def _snapshot_artifacts(self) -> set[str]:
+        """快照 work_dir 下 png/csv/npy 文件集合。"""
+        if not os.path.isdir(self.work_dir):
+            return set()
+        return {
+            name
+            for name in os.listdir(self.work_dir)
+            if name.lower().endswith((".png", ".csv", ".npy"))
+        }
 
     def execute_code_(self, code) -> list[tuple[str, str]]:
         assert self.kc is not None
@@ -206,22 +265,30 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                     all_output.append(("error", cleaned_output))
         return all_output
 
+    def _snapshot_image_names(self) -> set[str]:
+        """返回 work_dir 下当前的图片文件名集合，用作 section 基线。"""
+        if not os.path.isdir(self.work_dir):
+            return set()
+        return {
+            f
+            for f in os.listdir(self.work_dir)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        }
+
     async def get_created_images(self, section: str) -> list[str]:
-        """获取新创建的图片列表"""
-        current_images = set()
-        files = os.listdir(self.work_dir)
-        for file in files:
-            if file.endswith((".png", ".jpg", ".jpeg")):
-                current_images.add(file)
+        """获取本 section 期间新增的图片列表（非消费/幂等）。
 
-        # 计算新增的图片
-        new_images = current_images - self.last_created_images
-
-        # 更新last_created_images为当前的图片集合
+        以 section 起始基线（add_section 时快照）为参照，返回 current - baseline。
+        completion_check 与最终返回可多次调用且结果一致，不会互相"吃掉"对方的 diff，
+        因此 writer 能正确拿到每问题图片，subtask.summary 的 png_count 也真实。
+        """
+        current_images = self._snapshot_image_names()
+        baseline = self.section_baseline.get(section, self.last_created_images)
+        new_images = current_images - baseline
+        # 仅作为未登记 section 的回退基线，不影响已登记 section 的计算
         self.last_created_images = current_images
-
-        logger.info(f"新创建的图片列表: {new_images}")
-        return list(new_images)  # 最后转换为list返回
+        logger.info(f"{section} 本阶段新创建的图片列表: {sorted(new_images)}")
+        return sorted(new_images)
 
     async def cleanup(self):
         # 关闭内核

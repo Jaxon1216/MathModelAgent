@@ -1,6 +1,8 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+import time
+
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
@@ -11,6 +13,7 @@ from app.models.user_output import UserOutput
 from app.config.setting import settings
 from app.tools.interpreter_factory import create_interpreter
 from app.services.redis_manager import redis_manager
+from app.services.trace_recorder import set_trace_phase, trace_recorder
 from app.tools.notebook_serializer import NotebookSerializer
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
@@ -55,6 +58,12 @@ class MathModelWorkFlow(WorkFlow):
         self.task_id = problem.task_id
         self.work_dir = create_work_dir(self.task_id)
 
+        await trace_recorder.emit(
+            self.task_id,
+            "task.start",
+            work_dir=self.work_dir,
+        )
+
         # 在创建 LLM 前预校验配置，避免进入 Agent 循环后才发现缺配置
         missing = []
         for name, model_val, key_val in [
@@ -77,6 +86,14 @@ class MathModelWorkFlow(WorkFlow):
             self.task_id, coordinator_llm,
             context_window=settings.COORDINATOR_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
+        )
+        await trace_recorder.emit(
+            self.task_id,
+            "agent.init",
+            agent="CoordinatorAgent",
+            agent_class="CoordinatorAgent",
+            model=coordinator_llm.model,
+            context_window=settings.COORDINATOR_CONTEXT_WINDOW,
         )
 
         await redis_manager.publish_message(
@@ -112,6 +129,14 @@ class MathModelWorkFlow(WorkFlow):
             context_window=settings.MODELER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
+        await trace_recorder.emit(
+            self.task_id,
+            "agent.init",
+            agent="ModelerAgent",
+            agent_class="ModelerAgent",
+            model=modeler_llm.model,
+            context_window=settings.MODELER_CONTEXT_WINDOW,
+        )
 
         modeler_response = await modeler_agent.run(coordinator_response)
 
@@ -129,6 +154,12 @@ class MathModelWorkFlow(WorkFlow):
             work_dir=self.work_dir,
             notebook_serializer=notebook_serializer,
             timeout=3000,
+        )
+        await trace_recorder.emit(
+            self.task_id,
+            "interpreter.init",
+            interpreter_type="local",
+            work_dir=self.work_dir,
         )
         
         assert settings.OPENALEX_EMAIL is not None, "OPENALEX_EMAIL 未配置"
@@ -159,6 +190,14 @@ class MathModelWorkFlow(WorkFlow):
             context_window=settings.CODER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
+        await trace_recorder.emit(
+            self.task_id,
+            "agent.init",
+            agent="CoderAgent",
+            agent_class="CoderAgent",
+            model=coder_llm.model,
+            context_window=settings.CODER_CONTEXT_WINDOW,
+        )
 
         writer_agent = WriterAgent(
             task_id=problem.task_id,
@@ -168,6 +207,14 @@ class MathModelWorkFlow(WorkFlow):
             scholar=scholar,
             context_window=settings.WRITER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
+        )
+        await trace_recorder.emit(
+            self.task_id,
+            "agent.init",
+            agent="WriterAgent",
+            agent_class="WriterAgent",
+            model=writer_llm.model,
+            context_window=settings.WRITER_CONTEXT_WINDOW,
         )
 
         flows = Flows(self.questions)
@@ -179,14 +226,27 @@ class MathModelWorkFlow(WorkFlow):
         for key, value in solution_flows.items():
             await self._check_cancelled()
 
+            set_trace_phase(key)
+            phase_started = time.monotonic()
+            await trace_recorder.emit(
+                self.task_id,
+                "phase.start",
+                phase=key,
+            )
+
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"代码手开始求解{key}"),
             )
 
-            coder_response = await coder_agent.run(
-                prompt=value["coder_prompt"], subtask_title=key
-            )
+            phase_success = True
+            try:
+                coder_response = await coder_agent.run(
+                    prompt=value["coder_prompt"], subtask_title=key
+                )
+            except Exception:
+                phase_success = False
+                raise
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -216,6 +276,15 @@ class MathModelWorkFlow(WorkFlow):
 
             user_output.set_res(key, writer_response)
 
+            await trace_recorder.emit(
+                self.task_id,
+                "phase.end",
+                phase=key,
+                success=phase_success,
+                duration_ms=int((time.monotonic() - phase_started) * 1000),
+            )
+            set_trace_phase(None)
+
         # 关闭沙盒
 
         await code_interpreter.cleanup()
@@ -229,6 +298,15 @@ class MathModelWorkFlow(WorkFlow):
         for key, value in write_flows.items():
             await self._check_cancelled()
 
+            set_trace_phase(key)
+            phase_started = time.monotonic()
+            await trace_recorder.emit(
+                self.task_id,
+                "phase.start",
+                phase=key,
+                stage="write",
+            )
+
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"论文手开始写{key}部分"),
@@ -237,6 +315,16 @@ class MathModelWorkFlow(WorkFlow):
             writer_response = await writer_agent.run(prompt=value, sub_title=key)
 
             user_output.set_res(key, writer_response)
+
+            await trace_recorder.emit(
+                self.task_id,
+                "phase.end",
+                phase=key,
+                stage="write",
+                success=True,
+                duration_ms=int((time.monotonic() - phase_started) * 1000),
+            )
+            set_trace_phase(None)
 
         logger.info(user_output.get_res())
 

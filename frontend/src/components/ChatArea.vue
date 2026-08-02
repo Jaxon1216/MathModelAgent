@@ -7,6 +7,7 @@ import { Send } from "lucide-vue-next";
 import { ref } from "vue";
 import Bubble from "./Bubble.vue";
 import SystemMessage from "./SystemMessage.vue";
+import TraceMessage from "./TraceMessage.vue";
 
 // ---- Props ----
 
@@ -45,6 +46,8 @@ const sendMessage = () => {
           <!-- 系统消息 -->
           <SystemMessage v-else-if="message.msg_type === 'system'" :content="message.content || ''"
             :type="message.type" />
+          <!-- Trace 埋点消息 -->
+          <TraceMessage v-else-if="message.msg_type === 'trace'" :content="message.content || ''" />
         </div>
       </template>
     </div>

@@ -2,19 +2,103 @@
 
 from __future__ import annotations
 
-# 竞赛向配色（与 CODER_PROMPT 保持同名，阶段 3 可在此统一调整）
+# 竞赛/学术向配色。键名与 visualization.md 技能文档严格一致（单一真源），
+# 否则技能模板引用 COLORS['accent'] 等会抛 KeyError 导致丑图/放弃配色。
 COLORS: dict[str, str] = {
-    "primary": "#2E5B88",
-    "secondary": "#E85D4C",
-    "tertiary": "#4A9B7F",
-    "neutral": "#7F7F7F",
-    "light": "#B8D4E8",
+    "primary": "#2E5B88",  # 主色：深蓝
+    "secondary": "#E07B54",  # 次色：橙红
+    "accent": "#4A9B7F",  # 强调：青绿
+    "neutral": "#7F7F7F",  # 中性：灰
+    "success": "#5FA55A",  # 正向：绿
+    "warning": "#E0A33E",  # 警示：琥珀
+    "danger": "#C0504D",  # 负向：砖红
+    "light": "#B8D4E8",  # 浅色填充
 }
 
-FIG_SINGLE = (5, 4)
-FIG_DOUBLE = (10, 4)
-FIG_WIDE = (8, 3)
-FIG_SQUARE = (6, 6)
+# 多系列循环顺序（供 DEFAULT_COLORS 使用，排除 light/neutral 作为主循环）
+_COLOR_CYCLE_KEYS = [
+    "primary",
+    "secondary",
+    "accent",
+    "success",
+    "warning",
+    "danger",
+    "neutral",
+]
+
+# 图尺寸（英寸）。与 visualization.md 技能文档保持一致（单一真源）。
+FIG_SINGLE = (6.5, 4.5)  # 单栏图
+FIG_DOUBLE = (13, 4.5)  # 双栏并排
+FIG_WIDE = (10, 4)  # 宽图（时序）
+FIG_SQUARE = (5, 5)  # 方形图（热力图/网络）
+
+
+# 注入到 kernel 命名空间的可复用绘图辅助函数（代码级强制质量/预算约束）。
+# 说明：这些函数在 kernel 内定义，运行时引用 kernel 的 COLORS，因此配色与全局一致。
+HELPERS_CODE = r'''
+def save_fig(fig, name, dpi=300):
+    """统一保存图片：300dpi + bbox tight + 自动 close，返回文件名。
+    优先使用本函数而非手写 plt.savefig，避免遗漏 dpi/close 导致丑图或内存泄漏。
+    """
+    import matplotlib.pyplot as plt
+    if not str(name).lower().endswith((".png", ".jpg", ".jpeg")):
+        name = str(name) + ".png"
+    fig.savefig(name, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return name
+
+
+# 全文柱状图预算计数器（硬上限 3）。跨 execute 持久，因为 kernel 命名空间不重置。
+_BAR_CHART_COUNT = {"n": 0}
+FIG_BUDGET = 18  # 全文图片建议上限
+
+
+def note_bar_chart(name=""):
+    """登记一次柱状图使用；超过全文上限(3)时打印醒目告警（Agent 可见文本）。"""
+    _BAR_CHART_COUNT["n"] += 1
+    n = _BAR_CHART_COUNT["n"]
+    if n > 3:
+        print(f"[FIG-BUDGET][WARN] 柱状图已达 {n} 个，超过全文上限 3 个 (最新: {name})。"
+              f"请改用折线/箱线/热力图，或与已有柱状图合并。")
+    else:
+        print(f"[FIG-BUDGET] 柱状图 {n}/3 (最新: {name})")
+    return n
+
+
+def barh_topn(ax, labels, values, top=15, highlight_max=True, fmt="{:.2f}", name=""):
+    """水平条形图 Top-N：按值降序、只画前 top 项、标注数值、最大值高亮。
+    专治"几十个类别标签重叠不可读"。自动登记柱状图预算 note_bar_chart。
+    """
+    import numpy as np
+    labels = list(labels)
+    values = list(values)
+    order = list(np.argsort(values)[::-1][:top])
+    sel_labels = [labels[i] for i in order]
+    sel_values = [values[i] for i in order]
+    if highlight_max and sel_values:
+        vmax = max(sel_values)
+        bar_colors = [COLORS["primary"] if v == vmax else COLORS["neutral"] for v in sel_values]
+    else:
+        bar_colors = COLORS["primary"]
+    bars = ax.barh(sel_labels, sel_values, color=bar_colors, edgecolor="none", height=0.65)
+    span = (max(sel_values) - min(sel_values)) if sel_values else 1
+    if not span:
+        span = max(sel_values) if sel_values else 1
+    for bar, v in zip(bars, sel_values):
+        ax.text(bar.get_width() + span * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                fmt.format(v), va="center", fontsize=8)
+    ax.invert_yaxis()
+    note_bar_chart(name)
+    return ax
+
+
+def annotate_stats(ax, text, loc=(0.05, 0.92)):
+    """在轴内左上角统一标注统计量文本 (r/p/R²/RMSE 等)。"""
+    ax.annotate(text, xy=loc, xycoords="axes fraction",
+                fontsize=9, ha="left", va="top")
+    return ax
+'''
 
 
 def build_matplotlib_init_code(
@@ -99,10 +183,13 @@ def build_matplotlib_init_code(
         + "    'savefig.pad_inches': 0.1,\n"
         + "})\n"
         + f"COLORS = {colors_repr}\n"
-        + "DEFAULT_COLORS = list(COLORS.values())\n"
+        + f"DEFAULT_COLORS = [COLORS[_k] for _k in {_COLOR_CYCLE_KEYS!r} if _k in COLORS]\n"
+        + "import matplotlib as _mpl\n"
+        + "_mpl.rcParams['axes.prop_cycle'] = _mpl.cycler(color=DEFAULT_COLORS)\n"
         + f"FIG_SINGLE = {fig_single}\n"
         + f"FIG_DOUBLE = {fig_double}\n"
         + f"FIG_WIDE = {fig_wide}\n"
         + f"FIG_SQUARE = {fig_square}\n"
-        + "print('[matplotlib_setup] 绘图环境就绪 (COLORS, FIG_* 已注入)')\n"
+        + HELPERS_CODE
+        + "print('[matplotlib_setup] 绘图环境就绪 (COLORS, FIG_*, save_fig, barh_topn, annotate_stats, note_bar_chart 已注入)')\n"
     )

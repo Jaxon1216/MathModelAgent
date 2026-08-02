@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+import os
 
 from app.core.agents.agent import Agent
 from app.config.setting import settings, ApiType
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
+from app.services.trace_recorder import trace_recorder
 from app.schemas.response import SystemMessage, InterpreterMessage
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.core.llm.llm import LLM
@@ -93,6 +95,7 @@ class CoderAgent(Agent):
         last_error_message = ""
         last_tool_output = ""   # 记录最近一次成功的 tool 输出，供 completion check 使用
         completion_checked = False  # 是否已经做过一次 completion check
+        subtask_turns = 0
 
         while True:
             # ---- 退出条件检查 ----
@@ -125,7 +128,18 @@ class CoderAgent(Agent):
                 )
 
             self.current_chat_turns += 1
+            subtask_turns += 1
             logger.info(f"当前对话轮次: {self.current_chat_turns}")
+
+            await trace_recorder.emit(
+                self.task_id,
+                "react.turn",
+                agent=self.__class__.__name__,
+                phase=subtask_title,
+                turn=subtask_turns,
+                retry_count=retry_count,
+                completion_checked=completion_checked,
+            )
 
             try:
                 response = await self._chat(
@@ -155,6 +169,15 @@ class CoderAgent(Agent):
                     ]
                     await self.append_chat_history(assistant_msg)
 
+                    await trace_recorder.emit(
+                        self.task_id,
+                        "tool.call",
+                        agent=self.__class__.__name__,
+                        phase=subtask_title,
+                        tool_name=tool_call.name,
+                        arg_summary=self._summarize_tool_args(tool_call.name, tool_call.arguments),
+                    )
+
                     # ---- 分支：load_skill ----
                     if tool_call.name == "load_skill":
                         skill_name = json.loads(tool_call.arguments).get("skill_name", "")
@@ -177,6 +200,15 @@ class CoderAgent(Agent):
                                 f"技能 '{skill_name}' 不存在。"
                                 f"可用技能：{available}"
                             )
+                        await trace_recorder.emit(
+                            self.task_id,
+                            "skill.load",
+                            agent=self.__class__.__name__,
+                            phase=subtask_title,
+                            skill_name=skill_name,
+                            found=skill is not None,
+                            body_chars=len(skill.body) if skill else 0,
+                        )
                         await self.append_chat_history(
                             {
                                 "role": "tool",
@@ -219,6 +251,14 @@ class CoderAgent(Agent):
                             retry_count += 1
                             last_error_message = error_message
                             logger.info(f"当前尝试次: {retry_count} / {self.max_retries}")
+                            await trace_recorder.emit(
+                                self.task_id,
+                                "react.reflect",
+                                agent=self.__class__.__name__,
+                                phase=subtask_title,
+                                retry_count=retry_count,
+                                error_preview=error_message[:200],
+                            )
                             await redis_manager.publish_message(
                                 self.task_id,
                                 SystemMessage(content="代码手反思纠正错误", type="error"),
@@ -247,6 +287,17 @@ class CoderAgent(Agent):
                         # 第一次无工具调用：注入 completion check，再给 LLM 一次机会
                         logger.info("无工具调用，注入 completion check")
                         completion_checked = True
+                        section_images = await self.code_interpreter.get_created_images(
+                            subtask_title
+                        )
+                        await trace_recorder.emit(
+                            self.task_id,
+                            "react.completion_check",
+                            agent=self.__class__.__name__,
+                            phase=subtask_title,
+                            images_in_section=len(section_images),
+                            will_continue=True,
+                        )
                         await self.append_chat_history(
                             {"role": "assistant", "content": response.content or ""}
                         )
@@ -262,11 +313,15 @@ class CoderAgent(Agent):
 
                     # 第二次无工具调用：真正完成，返回结果
                     logger.info("completion check 通过，子任务完成")
+                    created_images = await self.code_interpreter.get_created_images(
+                        subtask_title
+                    )
+                    await self._emit_subtask_summary(
+                        subtask_title, subtask_turns, retry_count, created_images
+                    )
                     return CoderToWriter(
                         code_response=response.content,
-                        created_images=await self.code_interpreter.get_created_images(
-                            subtask_title
-                        ),
+                        created_images=created_images,
                     )
 
             except Exception as e:
@@ -276,3 +331,44 @@ class CoderAgent(Agent):
                 continue
 
         logger.info(f"{self.__class__.__name__}:完成:执行子任务: {subtask_title}")
+
+    @staticmethod
+    def _summarize_tool_args(tool_name: str, arguments: str) -> str:
+        """生成工具参数摘要，避免 Trace 中写入完整代码。"""
+        try:
+            args = json.loads(arguments)
+        except json.JSONDecodeError:
+            return "invalid json"
+
+        if tool_name == "execute_code":
+            code = args.get("code", "")
+            lines = code.count("\n") + 1 if code else 0
+            return f"{lines} lines"
+        if tool_name == "load_skill":
+            return str(args.get("skill_name", ""))
+        return ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
+
+    async def _emit_subtask_summary(
+        self,
+        subtask_title: str,
+        turns: int,
+        retries: int,
+        created_images: list[str],
+    ) -> None:
+        """子任务结束时输出 Trace 汇总。"""
+        png_count = len(created_images)
+        csv_count = 0
+        if os.path.isdir(self.work_dir):
+            csv_count = sum(
+                1 for name in os.listdir(self.work_dir) if name.lower().endswith(".csv")
+            )
+        await trace_recorder.emit(
+            self.task_id,
+            "subtask.summary",
+            agent=self.__class__.__name__,
+            phase=subtask_title,
+            turns=turns,
+            retries=retries,
+            png_count=png_count,
+            csv_count=csv_count,
+        )

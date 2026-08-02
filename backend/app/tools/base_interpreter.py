@@ -13,6 +13,7 @@ from app.schemas.response import (
 
 class BaseCodeInterpreter(abc.ABC):
     """代码解释器抽象基类，定义代码执行、输出管理和资源清理的接口。"""
+
     def __init__(
         self,
         task_id: str,
@@ -24,6 +25,10 @@ class BaseCodeInterpreter(abc.ABC):
         self.notebook_serializer = notebook_serializer
         self.section_output: dict[str, dict[str, list[str]]] = {}
         self.last_created_images = set()
+        # 每个 section 起始时的图片基线，用于非消费地计算"本 section 新增图片"。
+        # 修复：旧实现用 current-last 且就地更新 last，导致 completion_check 先消费掉 diff，
+        # 最终 get_created_images 返回 [] → writer 拿不到每问题图片。
+        self.section_baseline: dict[str, set[str]] = {}
 
     @abc.abstractmethod
     async def initialize(self):
@@ -63,10 +68,20 @@ class BaseCodeInterpreter(abc.ABC):
         )
 
     def add_section(self, section_name: str) -> None:
-        """确保添加的section结构正确"""
+        """确保添加的section结构正确，并捕获该 section 起始时的图片基线。
+
+        coder_agent 在子任务开始、执行任何代码之前调用本方法，此刻快照的图片集合
+        即为该 section 的基线；之后新增的图片才算作本 section 的产物。
+        """
 
         if section_name not in self.section_output:
             self.section_output[section_name] = {"content": [], "images": []}
+        if section_name not in self.section_baseline:
+            self.section_baseline[section_name] = self._snapshot_image_names()
+
+    def _snapshot_image_names(self) -> set[str]:
+        """返回当前环境下已存在的图片文件名集合（子类按各自存储方式覆盖）。"""
+        return set()
 
     def add_content(self, section: str, text: str) -> None:
         """向指定section添加文本内容"""

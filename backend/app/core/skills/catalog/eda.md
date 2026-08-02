@@ -20,6 +20,18 @@ import numpy as np
 
 df = pd.read_csv("data.csv")  # 或 pd.read_excel
 
+# 步骤 0：dtype 规范化（必做，避免后续 datetime/groupby 报错）
+# 本轮 EDA 的重试全部来自"对非 datetime 列用 .dt / resample"或"时间列还是字符串"。
+for col in df.columns:
+    lc = str(col).lower()
+    if any(k in lc for k in ["time", "date", "日期", "时间", "timestamp"]):
+        df[col] = pd.to_datetime(df[col], errors="coerce")  # 无法解析→NaT，不抛异常
+        print(f"[dtype] 时间列 {col} -> {df[col].dtype}，NaT 比例 {df[col].isna().mean():.1%}")
+
+def ensure_datetime(s):
+    """确保是 datetime 序列再用 .dt / resample，否则先转换。"""
+    return s if pd.api.types.is_datetime64_any_dtype(s) else pd.to_datetime(s, errors="coerce")
+
 # 步骤 1：数据结构
 print(df.info())
 print(df.head())

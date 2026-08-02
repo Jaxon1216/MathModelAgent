@@ -77,7 +77,7 @@ export const useTaskStore = defineStore("task", () => {
 		return (
 			typeof Reflect.get(payload, "id") === "string" &&
 			typeof msgType === "string" &&
-			["system", "agent", "user", "tool"].includes(msgType)
+			["system", "agent", "user", "tool", "trace"].includes(msgType)
 		);
 	}
 
@@ -257,6 +257,9 @@ export const useTaskStore = defineStore("task", () => {
 				return true;
 			}
 			if (msg.msg_type === "system") {
+				return true;
+			}
+			if (msg.msg_type === "trace") {
 				return true;
 			}
 			// if (msg.msg_type === 'tool' && msg.tool_name === 'execute_code') {

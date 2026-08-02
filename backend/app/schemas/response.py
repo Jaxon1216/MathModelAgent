@@ -9,7 +9,7 @@ from uuid import uuid4
 class Message(BaseModel):
     """消息基类。"""
     id: str = Field(default_factory=lambda: str(uuid4()))
-    msg_type: str  # system | agent | user | tool | approval
+    msg_type: str  # system | agent | user | tool | approval | trace
     content: str | None = None
 
 
@@ -106,6 +106,16 @@ class WriterMessage(AgentMessage):
     sub_title: str | None = None
 
 
+class TraceMessage(Message):
+    """Trace 埋点消息，供前端观测核心链路事件。"""
+
+    msg_type: Literal["trace"] = "trace"  # type: ignore[assignment]
+    event: str
+    agent: str | None = None
+    phase: str | None = None
+    payload: dict = Field(default_factory=dict)
+
+
 class ApprovalMessage(Message):
     """HIL 审批消息，发送到前端触发审批对话框。"""
 
@@ -136,4 +146,5 @@ MessageType = Union[
     WriterMessage,
     ModelerMessage,
     CoordinatorMessage,
+    TraceMessage,
 ]
