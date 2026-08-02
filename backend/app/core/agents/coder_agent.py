@@ -14,7 +14,11 @@ from app.tools.base_interpreter import BaseCodeInterpreter
 from app.core.llm.llm import LLM
 from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT
-from app.core.prompts import get_reflection_prompt, get_completion_check_prompt
+from app.core.prompts import (
+    get_reflection_prompt,
+    get_completion_check_prompt,
+    get_figure_missing_prompt,
+)
 from app.core.skills.loader import SkillLoader
 from app.core.functions import get_coder_tools, get_coder_tools_anthropic
 from app.utils.common_utils import get_current_files
@@ -91,9 +95,11 @@ class CoderAgent(Agent):
         logger.info(f"添加子任务提示: {prompt}")
         await self.append_chat_history({"role": "user", "content": prompt})
 
+        await self._ensure_phase_skills(subtask_title)
+
         retry_count = 0
         last_error_message = ""
-        last_tool_output = ""   # 记录最近一次成功的 tool 输出，供 completion check 使用
+        last_tool_output = ""  # 记录最近一次成功的 tool 输出，供 completion check 使用
         completion_checked = False  # 是否已经做过一次 completion check
         subtask_turns = 0
 
@@ -117,7 +123,10 @@ class CoderAgent(Agent):
                     created_images=[],
                 )
 
-            if self.max_chat_turns is not None and self.current_chat_turns >= self.max_chat_turns:
+            if (
+                self.max_chat_turns is not None
+                and self.current_chat_turns >= self.max_chat_turns
+            ):
                 logger.error(f"超过最大聊天次数: {self.max_chat_turns}")
                 await redis_manager.publish_message(
                     self.task_id,
@@ -156,7 +165,10 @@ class CoderAgent(Agent):
                     tool_id = tool_call.id
 
                     # ---- 构建 assistant 消息（含 tool_calls） ----
-                    assistant_msg: dict = {"role": "assistant", "content": response.content}
+                    assistant_msg: dict = {
+                        "role": "assistant",
+                        "content": response.content,
+                    }
                     if response.reasoning_content:
                         assistant_msg["reasoning_content"] = response.reasoning_content
                     assistant_msg["tool_calls"] = [
@@ -175,12 +187,16 @@ class CoderAgent(Agent):
                         agent=self.__class__.__name__,
                         phase=subtask_title,
                         tool_name=tool_call.name,
-                        arg_summary=self._summarize_tool_args(tool_call.name, tool_call.arguments),
+                        arg_summary=self._summarize_tool_args(
+                            tool_call.name, tool_call.arguments
+                        ),
                     )
 
                     # ---- 分支：load_skill ----
                     if tool_call.name == "load_skill":
-                        skill_name = json.loads(tool_call.arguments).get("skill_name", "")
+                        skill_name = json.loads(tool_call.arguments).get(
+                            "skill_name", ""
+                        )
                         logger.info(f"加载技能: {skill_name}")
                         await redis_manager.publish_message(
                             self.task_id,
@@ -189,7 +205,7 @@ class CoderAgent(Agent):
                         skill = self._skill_loader.get_skill(skill_name)
                         if skill:
                             skill_content = (
-                                f"<skill-loaded name=\"{skill_name}\">\n"
+                                f'<skill-loaded name="{skill_name}">\n'
                                 f"{skill.body}\n"
                                 f"</skill-loaded>\n\n"
                                 f"技能已加载：{skill.name}。请严格遵循上述技能说明完成任务。"
@@ -197,8 +213,7 @@ class CoderAgent(Agent):
                         else:
                             available = ", ".join(self._skill_loader.list_skills())
                             skill_content = (
-                                f"技能 '{skill_name}' 不存在。"
-                                f"可用技能：{available}"
+                                f"技能 '{skill_name}' 不存在。可用技能：{available}"
                             )
                         await trace_recorder.emit(
                             self.task_id,
@@ -234,9 +249,11 @@ class CoderAgent(Agent):
                             InterpreterMessage(input={"code": code}),
                         )
 
-                        text_to_gpt, error_occurred, error_message = (
-                            await self.code_interpreter.execute_code(code)
-                        )
+                        (
+                            text_to_gpt,
+                            error_occurred,
+                            error_message,
+                        ) = await self.code_interpreter.execute_code(code)
 
                         if error_occurred:
                             await self.append_chat_history(
@@ -250,7 +267,9 @@ class CoderAgent(Agent):
                             logger.warning(f"代码执行错误: {error_message}")
                             retry_count += 1
                             last_error_message = error_message
-                            logger.info(f"当前尝试次: {retry_count} / {self.max_retries}")
+                            logger.info(
+                                f"当前尝试次: {retry_count} / {self.max_retries}"
+                            )
                             await trace_recorder.emit(
                                 self.task_id,
                                 "react.reflect",
@@ -261,12 +280,16 @@ class CoderAgent(Agent):
                             )
                             await redis_manager.publish_message(
                                 self.task_id,
-                                SystemMessage(content="代码手反思纠正错误", type="error"),
+                                SystemMessage(
+                                    content="代码手反思纠正错误", type="error"
+                                ),
                             )
                             await self.append_chat_history(
                                 {
                                     "role": "user",
-                                    "content": get_reflection_prompt(error_message, code),
+                                    "content": get_reflection_prompt(
+                                        error_message, code
+                                    ),
                                 }
                             )
                         else:
@@ -290,18 +313,28 @@ class CoderAgent(Agent):
                         section_images = await self.code_interpreter.get_created_images(
                             subtask_title
                         )
+                        min_figs = self._min_figures_for_phase(subtask_title)
+                        images_ok = len(section_images) >= min_figs
                         await trace_recorder.emit(
                             self.task_id,
                             "react.completion_check",
                             agent=self.__class__.__name__,
                             phase=subtask_title,
                             images_in_section=len(section_images),
+                            images_required=min_figs,
+                            images_ok=images_ok,
                             will_continue=True,
                         )
                         await self.append_chat_history(
                             {"role": "assistant", "content": response.content or ""}
                         )
-                        check_prompt = get_completion_check_prompt(prompt, last_tool_output)
+                        check_prompt = get_completion_check_prompt(
+                            prompt, last_tool_output
+                        )
+                        if not images_ok and min_figs > 0:
+                            check_prompt += get_figure_missing_prompt(
+                                subtask_title, len(section_images), min_figs
+                            )
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(content="代码手执行完成验证"),
@@ -311,11 +344,42 @@ class CoderAgent(Agent):
                         )
                         continue
 
-                    # 第二次无工具调用：真正完成，返回结果
-                    logger.info("completion check 通过，子任务完成")
+                    # 第二次无工具调用：检查图片是否达标后再退出
                     created_images = await self.code_interpreter.get_created_images(
                         subtask_title
                     )
+                    min_figs = self._min_figures_for_phase(subtask_title)
+                    if min_figs > 0 and len(created_images) < min_figs:
+                        logger.warning(
+                            f"子任务 {subtask_title} 图片不足 "
+                            f"{len(created_images)}/{min_figs}，阻断退出并要求补图"
+                        )
+                        completion_checked = False
+                        await trace_recorder.emit(
+                            self.task_id,
+                            "react.completion_check",
+                            agent=self.__class__.__name__,
+                            phase=subtask_title,
+                            images_in_section=len(created_images),
+                            images_required=min_figs,
+                            images_ok=False,
+                            will_continue=True,
+                            blocked_exit=True,
+                        )
+                        await self.append_chat_history(
+                            {"role": "assistant", "content": response.content or ""}
+                        )
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": get_figure_missing_prompt(
+                                    subtask_title, len(created_images), min_figs
+                                ),
+                            }
+                        )
+                        continue
+
+                    logger.info("completion check 通过，子任务完成")
                     await self._emit_subtask_summary(
                         subtask_title, subtask_turns, retry_count, created_images
                     )
@@ -331,6 +395,61 @@ class CoderAgent(Agent):
                 continue
 
         logger.info(f"{self.__class__.__name__}:完成:执行子任务: {subtask_title}")
+
+    @staticmethod
+    def _min_figures_for_phase(phase: str) -> int:
+        """返回子任务阶段要求的最低 png 数量。"""
+        if phase.startswith("ques"):
+            return 2
+        if phase == "eda":
+            return 2
+        if phase == "sensitivity_analysis":
+            return 1
+        return 0
+
+    async def _ensure_phase_skills(self, subtask_title: str) -> None:
+        """子任务开始时预注入必备技能，避免 ques 阶段跳过 visualization 导致零产出。"""
+        if subtask_title.startswith("ques"):
+            skill_names = ["mathematical-modeling", "visualization", "figure-reporting"]
+        elif subtask_title == "sensitivity_analysis":
+            skill_names = ["sensitivity-analysis", "visualization", "figure-reporting"]
+        elif subtask_title == "eda":
+            skill_names = ["eda", "visualization", "figure-reporting"]
+        else:
+            return
+
+        for skill_name in skill_names:
+            await self._inject_skill_content(skill_name, subtask_title)
+
+    async def _inject_skill_content(self, skill_name: str, subtask_title: str) -> None:
+        """将技能 body 注入对话历史（等效 load_skill，不消耗 tool 轮次）。"""
+        skill = self._skill_loader.get_skill(skill_name)
+        if skill:
+            skill_content = (
+                f'<skill-preloaded name="{skill_name}">\n'
+                f"{skill.body}\n"
+                f"</skill-preloaded>\n\n"
+                f"技能已预加载：{skill.name}。请严格遵循上述技能说明完成任务。"
+            )
+        else:
+            available = ", ".join(self._skill_loader.list_skills())
+            skill_content = f"技能 '{skill_name}' 不存在。可用技能：{available}"
+        logger.info(f"预加载技能: {skill_name} ({subtask_title})")
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"代码手预加载技能: {skill_name}"),
+        )
+        await trace_recorder.emit(
+            self.task_id,
+            "skill.load",
+            agent=self.__class__.__name__,
+            phase=subtask_title,
+            skill_name=skill_name,
+            found=skill is not None,
+            body_chars=len(skill.body) if skill else 0,
+            preloaded=True,
+        )
+        await self.append_chat_history({"role": "user", "content": skill_content})
 
     @staticmethod
     def _summarize_tool_args(tool_name: str, arguments: str) -> str:

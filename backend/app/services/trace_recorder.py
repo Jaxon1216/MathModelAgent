@@ -110,10 +110,14 @@ class TraceRecorder:
             )
 
         if event == "react.completion_check":
+            req = payload.get("images_required")
+            req_part = f", required={req}" if req is not None else ""
+            blocked = " BLOCKED" if payload.get("blocked_exit") else ""
             return (
                 f"react.completion_check{phase_part} · "
-                f"images={payload.get('images_in_section', 0)}, "
-                f"continue={payload.get('will_continue', False)}"
+                f"images={payload.get('images_in_section', 0)}{req_part}, "
+                f"ok={payload.get('images_ok', False)}, "
+                f"continue={payload.get('will_continue', False)}{blocked}"
             )
 
         if event == "artifact.created":

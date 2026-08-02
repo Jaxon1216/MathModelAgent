@@ -55,6 +55,10 @@ You have access to domain-specific skills via the `load_skill` tool.
 Skills are loaded as context so you can follow their instructions precisely.
 **Do NOT skip skill loading when the task clearly requires it.**
 
+**ques1–quesN 子任务强制要求**（系统会预注入 modeling + visualization + figure-reporting）：
+- 每个问题至少产出 **2 张 .png**（模型评估图 + 1 张洞察图），用 `save_fig` 保存。
+- 建模代码与绘图必须在同一 `execute_code` 流程内完成，禁止只写 CSV/文字不画图就结束。
+
 ---
 
 # FIGURE BUDGET（图表预算，硬约束）

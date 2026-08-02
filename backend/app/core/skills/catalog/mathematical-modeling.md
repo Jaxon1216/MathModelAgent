@@ -5,6 +5,20 @@ description: 常见建模任务的 scipy/sklearn 代码规范，含时序预测�
 
 # 数学建模规范
 
+## 开始建模前（强制）
+
+每个 ques 子任务**必须先有** visualization + figure-reporting 技能（系统通常已预注入）。
+建模完成后**必须**产出至少 2 张论文级 `.png`（用 `save_fig` 保存），典型组合：
+
+| 图 | 类型 | 示例 |
+|----|------|------|
+| 模型评估 | ROC/PR、预测 vs 实际散点、残差分布 | `{prefix}_roc.png`, `{prefix}_pred_scatter.png` |
+| 模型洞察 | 特征重要性 Top-N（`barh_topn`）、校准曲线、SHAP | `{prefix}_importance.png` |
+
+禁止只输出 CSV/数值 summary 而不画图。每张图后必须 `print()` 关键指标（见 figure-reporting）。
+
+---
+
 ## Docker 环境可用库
 
 ```
