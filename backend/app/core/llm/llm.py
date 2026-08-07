@@ -1,9 +1,9 @@
 """LLM 交互模块，封装大语言模型的调用、重试和消息发送。"""
 
+import time
 from typing import Any
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
-import time
 from app.schemas.response import (
     CoderMessage,
     WriterMessage,
@@ -12,6 +12,7 @@ from app.schemas.response import (
     CoordinatorMessage,
 )
 from app.services.redis_manager import redis_manager
+from app.services.trace_recorder import trace_recorder
 from app.schemas.enums import AgentType
 from app.config.setting import ApiType
 from app.core.llm.types import StandardResponse
@@ -107,6 +108,7 @@ class LLM:
         attempt = 0
         while True:
             try:
+                start_ts = time.monotonic()
                 response = await self.provider.call(
                     messages=messages,
                     model=self.model,  # type: ignore[arg-type]
@@ -117,9 +119,24 @@ class LLM:
                     max_tokens=self.max_tokens,
                     top_p=top_p,
                 )
+                latency_ms = round((time.monotonic() - start_ts) * 1000)
                 logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
                 self.chat_count += 1
                 await self.send_message(response, agent_name, sub_title)
+                await trace_recorder.emit(
+                    self.task_id,
+                    "llm.response",
+                    agent=agent_name,
+                    model=self.model,
+                    latency_ms=latency_ms,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    total_tokens=response.usage.total_tokens,
+                    cache_read_tokens=response.usage.cache_read_tokens,
+                    reasoning_tokens=response.usage.reasoning_tokens,
+                    tool_calls_count=len(response.tool_calls),
+                    chat_count=self.chat_count,
+                )
                 return response
             except Exception as e:
                 if _is_non_retryable_llm_error(e):

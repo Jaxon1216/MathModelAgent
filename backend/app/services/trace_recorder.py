@@ -135,6 +135,17 @@ class TraceRecorder:
                 f"csv={payload.get('csv_count', 0)}"
             )
 
+        if event == "llm.response":
+            return (
+                f"llm.response{phase_part} · "
+                f"{payload.get('agent', '')} model={payload.get('model', '')}, "
+                f"{payload.get('latency_ms', 0)}ms, "
+                f"prompt={payload.get('prompt_tokens', 0)}, "
+                f"completion={payload.get('completion_tokens', 0)}, "
+                f"total={payload.get('total_tokens', 0)}, "
+                f"tools={payload.get('tool_calls_count', 0)}"
+            )
+
         # 兜底：展示 event 与 payload 键
         keys = ", ".join(f"{k}={v}" for k, v in list(payload.items())[:4])
         return f"{event}{phase_part} · {keys}" if keys else event

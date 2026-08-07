@@ -46,7 +46,13 @@ case "$file" in
     backend/*.py)
         cd "$REPO_ROOT/backend" || exit 0
         export PYTHONIOENCODING=utf-8
-        run_check ./.venv/Scripts/python.exe -m ruff check app/
+        if [[ -f ./.venv/bin/python ]]; then
+            run_check ./.venv/bin/python -m ruff check app/
+        elif [[ -f ./.venv/Scripts/python.exe ]]; then
+            run_check ./.venv/Scripts/python.exe -m ruff check app/
+        else
+            run_check python3 -m ruff check app/
+        fi
         ;;
     frontend/src/*.vue|frontend/src/*.ts|frontend/src/*/*.vue|frontend/src/*/*.ts|frontend/src/*/*/*.vue|frontend/src/*/*/*.ts|frontend/src/*/*/*/*.vue|frontend/src/*/*/*/*.ts)
         cd "$REPO_ROOT/frontend" || exit 0

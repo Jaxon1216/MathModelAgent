@@ -18,6 +18,9 @@ class Usage:
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    total_tokens: int = 0
+    cache_read_tokens: int = 0  # Anthropic cache_read / OpenAI cached_tokens
+    reasoning_tokens: int = 0  # DeepSeek reasoning / o1 reasoning_tokens
 
 
 @dataclass

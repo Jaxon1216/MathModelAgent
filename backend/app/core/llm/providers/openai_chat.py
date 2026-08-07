@@ -47,6 +47,17 @@ class OpenAIChatProvider(BaseProvider):
         usage = Usage(
             prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
             completion_tokens=response.usage.completion_tokens if response.usage else 0,
+            total_tokens=response.usage.total_tokens if response.usage else 0,
+            cache_read_tokens=(
+                response.usage.prompt_tokens_details.cached_tokens
+                if response.usage and response.usage.prompt_tokens_details
+                else 0
+            ),
+            reasoning_tokens=(
+                response.usage.completion_tokens_details.reasoning_tokens
+                if response.usage and response.usage.completion_tokens_details
+                else 0
+            ),
         )
 
         reasoning = getattr(message, "reasoning_content", None)

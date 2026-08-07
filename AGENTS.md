@@ -52,6 +52,42 @@ jq -r '.event' backend/logs/traces/{task_id}.jsonl | sort | uniq -c
 jq 'select(.event=="subtask.summary")' backend/logs/traces/{task_id}.jsonl
 ```
 
+## 测试与 E2E 评估
+
+### 工程护栏（每次改完跑）
+
+```bash
+cd backend && make check    # lint + test 一键
+```
+
+### 例题 Fixture（三个已解析，直接加载构造 Problem）
+
+```python
+from app.tests.conftest import load_problem_fixture, list_problem_fixtures
+
+# 三个例题：2023华数杯C题 / 2024高教杯C题 / 2025五一杯C题
+fixture = load_problem_fixture("2025五一杯C题")
+# fixture["ques_all"]        → 完整题目文本
+# fixture["data_files"]      → 数据文件清单
+# fixture["expected_ques_count"] → 子问题数
+
+from app.schemas.request import Problem
+problem = Problem(task_id=..., ques_all=fixture["ques_all"])
+```
+
+Fixture 文件：`backend/fixtures/problems/{name}.json`
+
+### E2E 评分卡（跑完任务后）
+
+```bash
+cd backend
+uv run python scripts/eval_task.py --task-id {task_id}
+uv run python scripts/eval_task.py --task-id {task_id} \
+  --baseline fixtures/baseline/social-media/expected.json
+```
+
+评分维度见 `docs/enhance/evaluation.md`：Agent 质量、绘图质量、论文结构。
+
 ## 边界
 
 - **开源本地项目**：不做 CI/GitHub Actions，改完本地 `make check` 或手动 lint/test 即可

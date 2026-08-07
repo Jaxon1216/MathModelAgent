@@ -55,6 +55,17 @@ class OpenAIResponsesProvider(BaseProvider):
         usage = Usage(
             prompt_tokens=response.usage.input_tokens if response.usage else 0,
             completion_tokens=response.usage.output_tokens if response.usage else 0,
+            total_tokens=response.usage.total_tokens if response.usage else 0,
+            cache_read_tokens=(
+                response.usage.input_tokens_details.cached_tokens
+                if response.usage and response.usage.input_tokens_details
+                else 0
+            ),
+            reasoning_tokens=(
+                response.usage.output_tokens_details.reasoning_tokens
+                if response.usage and response.usage.output_tokens_details
+                else 0
+            ),
         )
 
         return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)

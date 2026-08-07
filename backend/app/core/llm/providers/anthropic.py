@@ -58,6 +58,10 @@ class AnthropicProvider(BaseProvider):
         usage = Usage(
             prompt_tokens=response.usage.input_tokens,
             completion_tokens=response.usage.output_tokens,
+            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            cache_read_tokens=(
+                getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            ),
         )
 
         return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)

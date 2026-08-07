@@ -223,9 +223,12 @@ def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:
     Returns:
         (正文, 脚注列表) 的元组，脚注格式为 (编号, 内容)。
     """
+    # 先移除脚注定义行（[^N]: ...）
     main_text = re.sub(
         r"\n\[\^\d+\]:.*?(?=\n\[\^|\n\n|\Z)", "", text, flags=re.DOTALL
-    ).strip()
+    )
+    # 再移除正文中的内联引用标记（[^N]），只留纯文本
+    main_text = re.sub(r"\[\^\d+\]", "", main_text).strip()
 
     # 匹配脚注定义
     footnotes = re.findall(r"\[\^(\d+)\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)", text, re.DOTALL)
