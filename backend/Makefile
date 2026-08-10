@@ -1,4 +1,4 @@
-.PHONY: lint format test typecheck check
+.PHONY: lint format test typecheck check logs
 
 lint:
 	uv run ruff check app/
@@ -13,3 +13,6 @@ typecheck:
 	npx pyright app/
 
 check: lint test
+
+logs:
+	uv run python scripts/preview_logs.py --latest --summary

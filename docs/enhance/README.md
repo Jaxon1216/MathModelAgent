@@ -11,6 +11,7 @@
 | [current-state.md](./current-state.md) | 现状盘点：观测、测试、导出管线、已知问题 |
 | [iteration-plan.md](./iteration-plan.md) | 分阶段迭代计划、原因、验收标准、分支策略 |
 | [evaluation.md](./evaluation.md) | 评测指标：哪些值得追、怎么跑、golden trace |
+| [task-history-and-logs.md](./task-history-and-logs.md) | 历史任务入口 + 日志预览：现状、改动计划、验证 |
 
 ## 协作方式
 
