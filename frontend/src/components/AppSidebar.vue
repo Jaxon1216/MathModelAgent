@@ -96,15 +96,20 @@ async function refreshHistory() {
 	}
 }
 
-/** 截断过长的 task_id */
-function shortTaskId(taskId: string): string {
-	return taskId.length > 20 ? `${taskId.slice(0, 18)}…` : taskId;
-}
-
-/** 格式化更新时间 */
+/** 格式化为「年月日 + 时间」，如 2026/8/10 23:51:48 */
 function formatUpdatedAt(iso: string): string {
 	try {
-		return new Date(iso).toLocaleString();
+		const d = new Date(iso);
+		if (Number.isNaN(d.getTime())) return iso;
+		return d.toLocaleString("zh-CN", {
+			year: "numeric",
+			month: "numeric",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+			hour12: false,
+		});
 	} catch {
 		return iso;
 	}
@@ -166,9 +171,9 @@ onMounted(() => {
                 >
                   <router-link
                     :to="`/task/${task.task_id}`"
-                    :title="`${task.task_id}\n${formatUpdatedAt(task.updated_at)}`"
+                    :title="task.task_id"
                   >
-                    <span class="truncate">{{ shortTaskId(task.task_id) }}</span>
+                    <span class="truncate">{{ formatUpdatedAt(task.updated_at) }}</span>
                   </router-link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
