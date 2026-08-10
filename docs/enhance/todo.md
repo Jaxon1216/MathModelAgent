@@ -12,12 +12,6 @@
 - [ ] `eval_task.py` 补 LLM 层指标聚合（`llm.response` 事件 → 总 token、延迟）
 - [ ] baseline 回归检测补 `min_eda_png` 判定逻辑（或在 EDA 解耦后删除）
 
-## 前端 · 历史任务入口（见 task-history-and-logs.md）
-
-- [ ] 后端 `GET /tasks` 列表 API
-- [ ] 侧边栏历史任务填充 + 跳转 `/task/:task_id`
-- [ ] （可选）已完成任务只读模式、状态徽章
-
 ## EDA / 数据预处理解耦（后续改造）
 
 背景：当前 EDA 阶段三处联动强制画图，产出的诊断图（直方图、箱线图）不应算入论文插图预算。
