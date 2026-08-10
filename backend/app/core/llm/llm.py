@@ -14,7 +14,7 @@ from app.schemas.response import (
 from app.services.redis_manager import redis_manager
 from app.services.trace_recorder import trace_recorder
 from app.schemas.enums import AgentType
-from app.config.setting import ApiType
+from app.config.setting import ApiType, settings
 from app.core.llm.types import StandardResponse
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
@@ -91,7 +91,7 @@ class LLM:
         history: list | None = None,
         tools: list | None = None,
         tool_choice: str | None = None,
-        max_retries: int | None = None,
+        max_retries: int | None = settings.MAX_RETRIES,
         retry_delay: float = 1.0,
         top_p: float | None = None,
         agent_name: str = "SystemAgent",
