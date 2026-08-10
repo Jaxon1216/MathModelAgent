@@ -1,14 +1,5 @@
 <script setup lang="ts">
-import {
-	BILLBILL,
-	DISCORD,
-	GITHUB_LINK,
-	QQ_GROUP,
-	TWITTER,
-	XHS,
-} from "@/utils/const";
-import NavUser from "./NavUser.vue";
-
+import { listTasks } from "@/apis/commonApi";
 import {
 	Sidebar,
 	SidebarContent,
@@ -23,34 +14,29 @@ import {
 	type SidebarProps,
 	SidebarRail,
 } from "@/components/ui/sidebar";
+import {
+	BILLBILL,
+	DISCORD,
+	GITHUB_LINK,
+	QQ_GROUP,
+	TWITTER,
+	XHS,
+} from "@/utils/const";
+import type { TaskSummary } from "@/utils/interface";
+import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
+import NavUser from "./NavUser.vue";
 
 // ---- Props ----
 
 const props = defineProps<SidebarProps>();
 
-// ---- Reactive State ----
+// ---- State ----
 
-/** 导航菜单数据 */
-const data = {
-	navMain: [
-		{
-			title: "开始",
-			url: "#",
-			items: [
-				{
-					title: "开始新任务",
-					url: "#",
-					isActive: false,
-				},
-			],
-		},
-		{
-			title: "历史任务",
-			url: "#",
-			items: [],
-		},
-	],
-};
+const route = useRoute();
+const historyTasks = ref<TaskSummary[]>([]);
+const historyLoading = ref(false);
+const historyError = ref<string | null>(null);
 
 const socialMedia = [
 	{
@@ -84,6 +70,51 @@ const socialMedia = [
 		icon: "/discord.svg",
 	},
 ];
+
+// ---- Computed ----
+
+const activeTaskId = computed(() => {
+	const id = route.params.task_id;
+	return typeof id === "string" ? id : null;
+});
+
+// ---- Methods ----
+
+/** 刷新侧边栏历史任务列表 */
+async function refreshHistory() {
+	historyLoading.value = true;
+	historyError.value = null;
+	try {
+		const res = await listTasks(50);
+		historyTasks.value = res.data?.tasks ?? [];
+	} catch (e) {
+		console.error("加载历史任务失败:", e);
+		historyError.value = "加载失败";
+		historyTasks.value = [];
+	} finally {
+		historyLoading.value = false;
+	}
+}
+
+/** 截断过长的 task_id */
+function shortTaskId(taskId: string): string {
+	return taskId.length > 20 ? `${taskId.slice(0, 18)}…` : taskId;
+}
+
+/** 格式化更新时间 */
+function formatUpdatedAt(iso: string): string {
+	try {
+		return new Date(iso).toLocaleString();
+	} catch {
+		return iso;
+	}
+}
+
+// ---- Lifecycle ----
+
+onMounted(() => {
+	void refreshHistory();
+});
 </script>
 
 <template>
@@ -98,15 +129,50 @@ const socialMedia = [
       </div>
     </SidebarHeader>
     <SidebarContent>
-      <SidebarGroup v-for="item in data.navMain" :key="item.title">
-        <SidebarGroupLabel>{{ item.title }}</SidebarGroupLabel>
+      <SidebarGroup>
+        <SidebarGroupLabel>开始</SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
-            <SidebarMenuItem v-for="childItem in item.items" :key="childItem.title">
-              <SidebarMenuButton as-child :is-active="childItem.isActive">
-                <a :href="childItem.url">{{ childItem.title }}</a>
+            <SidebarMenuItem>
+              <SidebarMenuButton as-child :is-active="route.path === '/chat'">
+                <router-link to="/chat">开始新任务</router-link>
               </SidebarMenuButton>
             </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarGroupLabel>历史任务</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem v-if="historyLoading">
+              <span class="px-2 text-sm text-muted-foreground">加载中…</span>
+            </SidebarMenuItem>
+            <SidebarMenuItem v-else-if="historyError">
+              <span class="px-2 text-sm text-muted-foreground">{{ historyError }}</span>
+            </SidebarMenuItem>
+            <SidebarMenuItem v-else-if="historyTasks.length === 0">
+              <span class="px-2 text-sm text-muted-foreground">暂无历史任务</span>
+            </SidebarMenuItem>
+            <template v-else>
+              <SidebarMenuItem
+                v-for="task in historyTasks"
+                :key="task.task_id"
+              >
+                <SidebarMenuButton
+                  as-child
+                  :is-active="activeTaskId === task.task_id"
+                >
+                  <router-link
+                    :to="`/task/${task.task_id}`"
+                    :title="`${task.task_id}\n${formatUpdatedAt(task.updated_at)}`"
+                  >
+                    <span class="truncate">{{ shortTaskId(task.task_id) }}</span>
+                  </router-link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </template>
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>

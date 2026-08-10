@@ -8,10 +8,15 @@ from fastapi import APIRouter, HTTPException
 from app.config.setting import settings
 from app.utils.common_utils import ensure_safe_task_id, get_config_template
 from app.schemas.enums import CompTemplate
+from app.schemas.task_summary import TaskListResponse
 from app.services.redis_manager import redis_manager
+from app.services.task_list import list_tasks
 from app.utils.log_util import logger
 
 router = APIRouter()
+
+MESSAGES_DIR = Path("logs/messages")
+WORK_DIR_ROOT = Path("project/work_dir")
 
 
 def _require_safe_task_id(task_id: str) -> str:
@@ -78,6 +83,25 @@ async def get_writer_seque():
     # 返回论文顺序
     config_template: dict = get_config_template(CompTemplate.CHINA)
     return list(config_template.keys())
+
+
+@router.get("/tasks", response_model=TaskListResponse)
+async def get_tasks(limit: int = 50) -> TaskListResponse:
+    """列出本地历史任务摘要（按消息文件 mtime 倒序）。
+
+    Args:
+        limit: 返回条数，默认 50；小于 1 时返回空列表。
+
+    Returns:
+        任务摘要列表。
+    """
+    capped = min(limit, 200)
+    tasks = list_tasks(
+        messages_dir=MESSAGES_DIR,
+        work_dir_root=WORK_DIR_ROOT,
+        limit=capped,
+    )
+    return TaskListResponse(tasks=tasks)
 
 
 @router.get("/messages")

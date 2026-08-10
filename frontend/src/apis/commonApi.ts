@@ -1,3 +1,4 @@
+import type { TaskListResponse } from "@/utils/interface";
 import request from "@/utils/request";
 import type { Message } from "@/utils/response";
 
@@ -9,6 +10,16 @@ export function getHelloWorld() {
 /** 获取论文写作顺序 */
 export function getWriterSeque() {
 	return request.get<{ writer_seque: string[] }>("/writer_seque");
+}
+
+/**
+ * 获取本地历史任务列表
+ * @param limit 返回条数，默认 50
+ */
+export function listTasks(limit = 50) {
+	return request.get<TaskListResponse>("/tasks", {
+		params: { limit },
+	});
 }
 
 /**
