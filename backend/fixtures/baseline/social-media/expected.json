@@ -1,9 +1,0 @@
-{
-  "_description": "社交媒体影响力建模基线期望。基于任务 20260802-105542-c916a31a 的已知合格行为设定阈值。",
-  "must_call_tools": ["execute_code", "load_skill"],
-  "min_png_per_ques": 2,
-  "min_eda_png": 5,
-  "max_execute_error_rate": 0.15,
-  "max_empty_sections": 0,
-  "min_image_coverage": 0.8
-}
