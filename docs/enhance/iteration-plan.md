@@ -175,8 +175,8 @@ cd backend && make test   # 新增用例全部绿
 
 ### 交付物
 
-- [ ] `backend/fixtures/baseline/`：1–2 个小型赛题（附件 + 期望指标 JSON）
-- [ ] `backend/scripts/eval_task.py`：读取 trace + work_dir，输出评分卡
+- [x] `backend/fixtures/baseline/2024高教杯C题/expected.json`：唯一评测赛题的期望指标
+- [x] `backend/scripts/eval_task.py`：读取 trace + work_dir，输出评分卡
 
 ### 评分维度
 
@@ -187,7 +187,9 @@ Golden trace 断言示例见 `evaluation.md`。
 ### 验收
 
 ```bash
-cd backend && make eval BASELINE=fixtures/baseline/social-media/
+cd backend
+uv run python scripts/eval_task.py --task-id {task_id} \
+  --baseline fixtures/baseline/2024高教杯C题/expected.json
 # 输出 scorecard，与 expected.json 对比
 ```
 
@@ -227,7 +229,7 @@ cd backend && make eval BASELINE=fixtures/baseline/social-media/
 |------|------|
 | 不用 skills/5writing Typst 模板 | 那是 harness 侧；后端主链路是 md→docx，应补 reference.docx |
 | 先不卡覆盖率 80% | 当前 codebase 几乎无测试，先建立习惯再提阈值 |
-| 基线赛题选 social-media 类 | 已有完整 trace 与 work_dir 可对照 |
+| 基线赛题只用 2024 高教杯 C 题 | 仓库只维护一道评测题，降低跑分成本 |
 | Writer 多 tool call 放在阶段 2 | 影响 RepeatQues 文献质量，与引用修复同批 |
 
 ---

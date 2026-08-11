@@ -19,7 +19,7 @@ def load_problem_fixture(source: str) -> dict[str, Any]:
     """加载预解析的例题 fixture。
 
     Args:
-        source: 例题来源目录名，如 "2025五一杯C题"。
+        source: 例题来源目录名，当前仅 "2024高教杯C题"。
 
     Returns:
         dict，包含 source、ques_all、data_files、expected_ques_count 等字段。

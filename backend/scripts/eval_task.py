@@ -2,8 +2,12 @@
 
 用法:
     python scripts/eval_task.py --task-id {task_id}
-    python scripts/eval_task.py --task-id {task_id} --baseline fixtures/baseline/social-media/expected.json
+    python scripts/eval_task.py --task-id {task_id} --baseline fixtures/baseline/2024高教杯C题/expected.json
+    python scripts/eval_task.py --task-id {task_id} --baseline ... --save-scorecard
+    python scripts/eval_task.py --task-id {new_id} --compare {old_task_id}
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -13,13 +17,17 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACES_DIR = PROJECT_ROOT / "logs" / "traces"
 WORK_DIR_ROOT = PROJECT_ROOT / "project" / "work_dir"
+DEFAULT_BASELINE_DIR = (
+    PROJECT_ROOT / "fixtures" / "baseline" / "2024高教杯C题"
+)
+SCORECARDS_DIR = DEFAULT_BASELINE_DIR / "scorecards"
 
 
 # ---- Trace 读取 ----
+
 
 def load_trace(task_id: str) -> list[dict]:
     """读取 JSONL trace 文件，返回事件列表。"""
@@ -40,6 +48,7 @@ def load_trace(task_id: str) -> list[dict]:
 
 
 # ---- Agent 质量指标 ----
+
 
 def compute_agent_quality(events: list[dict]) -> dict[str, Any]:
     """从 trace 事件计算 Agent 质量指标。"""
@@ -94,7 +103,71 @@ def compute_agent_quality(events: list[dict]) -> dict[str, Any]:
     }
 
 
+# ---- LLM 层指标 ----
+
+
+def compute_llm_metrics(events: list[dict]) -> dict[str, Any]:
+    """聚合 llm.response 事件的 token/延迟/调用次数。"""
+    llm_call_count = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_tokens = 0
+    total_cache_read_tokens = 0
+    total_reasoning_tokens = 0
+    total_latency_ms = 0
+
+    by_agent: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"calls": 0, "tokens": 0, "latency_ms": 0}
+    )
+    by_model: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"calls": 0, "tokens": 0}
+    )
+
+    for ev in events:
+        if ev.get("event") != "llm.response":
+            continue
+
+        payload = ev.get("payload", {})
+        agent = ev.get("agent") or payload.get("agent") or "unknown"
+        model = payload.get("model") or "unknown"
+
+        prompt_tokens = int(payload.get("prompt_tokens") or 0)
+        completion_tokens = int(payload.get("completion_tokens") or 0)
+        tokens = int(payload.get("total_tokens") or prompt_tokens + completion_tokens)
+        cache_read = int(payload.get("cache_read_tokens") or 0)
+        reasoning = int(payload.get("reasoning_tokens") or 0)
+        latency_ms = int(payload.get("latency_ms") or 0)
+
+        llm_call_count += 1
+        total_prompt_tokens += prompt_tokens
+        total_completion_tokens += completion_tokens
+        total_tokens += tokens
+        total_cache_read_tokens += cache_read
+        total_reasoning_tokens += reasoning
+        total_latency_ms += latency_ms
+
+        by_agent[agent]["calls"] += 1
+        by_agent[agent]["tokens"] += tokens
+        by_agent[agent]["latency_ms"] += latency_ms
+
+        by_model[model]["calls"] += 1
+        by_model[model]["tokens"] += tokens
+
+    return {
+        "llm_call_count": llm_call_count,
+        "total_prompt_tokens": total_prompt_tokens,
+        "total_completion_tokens": total_completion_tokens,
+        "total_tokens": total_tokens,
+        "total_cache_read_tokens": total_cache_read_tokens,
+        "total_reasoning_tokens": total_reasoning_tokens,
+        "total_latency_ms": total_latency_ms,
+        "by_agent": dict(by_agent),
+        "by_model": dict(by_model),
+    }
+
+
 # ---- 绘图质量指标 ----
+
 
 def compute_figure_quality(
     events: list[dict], work_dir: Path, res_md_path: Path
@@ -111,18 +184,15 @@ def compute_figure_quality(
                 png_by_phase[phase] = png_count
             png_total += png_count
 
-    # 备份：从 artifact.created 统计 png
     if png_total == 0:
         for ev in events:
             if ev.get("event") == "artifact.created":
                 if ev.get("payload", {}).get("kind") == "png":
                     png_total += 1
 
-    # work_dir 中的 png 文件数
     work_dir_pngs = sorted(work_dir.glob("*.png")) if work_dir.exists() else []
     work_dir_png_count = len(work_dir_pngs)
 
-    # image_coverage: res.md 中 ![alt](file) 的引用数 / work_dir png 数
     md_image_refs = 0
     if res_md_path.exists():
         md_text = res_md_path.read_text(encoding="utf-8")
@@ -131,8 +201,6 @@ def compute_figure_quality(
         round(md_image_refs / work_dir_png_count, 3) if work_dir_png_count > 0 else 0
     )
 
-    # duplicate png names across phases: 从 subtask.summary 无法直接比较跨 phase 文件名
-    # 用 artifact.created 的 path 字段来检测
     png_paths_by_phase: dict[str, set] = defaultdict(set)
     for ev in events:
         if ev.get("event") == "artifact.created":
@@ -160,7 +228,54 @@ def compute_figure_quality(
     }
 
 
+# ---- docx 深度检查 ----
+
+
+def inspect_docx(docx_path: Path) -> dict[str, Any]:
+    """解析 docx，检查图片与公式对象是否存在。"""
+    if not docx_path.exists() or docx_path.stat().st_size == 0:
+        return {
+            "docx_exists": False,
+            "docx_has_images": False,
+            "docx_has_math": False,
+            "docx_paragraph_count": 0,
+        }
+
+    try:
+        from docx import Document
+
+        doc = Document(str(docx_path))
+        paragraph_count = len(doc.paragraphs)
+
+        has_images = False
+        has_math = False
+        for element in doc.element.body.iter():
+            tag = element.tag
+            if tag.endswith("}drawing") or tag.endswith("}pict"):
+                has_images = True
+            if tag.endswith("}oMath") or tag.endswith("}oMathPara"):
+                has_math = True
+            if has_images and has_math:
+                break
+
+        return {
+            "docx_exists": True,
+            "docx_has_images": has_images,
+            "docx_has_math": has_math,
+            "docx_paragraph_count": paragraph_count,
+        }
+    except Exception as exc:
+        return {
+            "docx_exists": True,
+            "docx_has_images": False,
+            "docx_has_math": False,
+            "docx_paragraph_count": 0,
+            "docx_error": str(exc),
+        }
+
+
 # ---- 论文结构指标 ----
+
 
 def compute_paper_structure(
     res_json_path: Path, res_md_path: Path, res_docx_path: Path
@@ -171,7 +286,6 @@ def compute_paper_structure(
     in_text_cite_count = 0
     alt_is_filename_ratio = 0.0
 
-    # res.json
     if res_json_path.exists():
         try:
             res_data = json.loads(res_json_path.read_text(encoding="utf-8"))
@@ -184,20 +298,16 @@ def compute_paper_structure(
         except (json.JSONDecodeError, OSError):
             pass
 
-    # res.md
     if res_md_path.exists():
         md_text = res_md_path.read_text(encoding="utf-8")
-        # 脚注定义
         ref_count = len(re.findall(r"\[\^\d+\]:", md_text))
-        # 文中引用
-        in_text_cite_count = len(re.findall(r"\[\^\d+\]", md_text))
-        # 图片 alt 质量：检测 alt 是否为纯文件名（不含中文描述）
+        # 排除脚注定义行 [^n]:，只统计正文引用 [^n]
+        in_text_cite_count = len(re.findall(r"\[\^\d+\](?!:)", md_text))
         img_matches = re.findall(r"!\[(.*?)\]\((.+?\.(?:png|jpg|jpeg|svg))\)", md_text)
         if img_matches:
             filename_alts = 0
             for alt, src in img_matches:
                 src_name = src.split("/")[-1].rsplit(".", 1)[0]
-                # alt 为空、alt 等于文件名、alt 纯英文数字下划线 → 可能是文件名
                 if (
                     not alt.strip()
                     or alt.strip() == src_name
@@ -206,8 +316,7 @@ def compute_paper_structure(
                     filename_alts += 1
             alt_is_filename_ratio = round(filename_alts / len(img_matches), 3)
 
-    # docx smoke
-    docx_smoke = res_docx_path.exists() and res_docx_path.stat().st_size > 0
+    docx_info = inspect_docx(res_docx_path)
 
     return {
         "empty_sections": empty_sections,
@@ -215,11 +324,12 @@ def compute_paper_structure(
         "ref_count": ref_count,
         "in_text_cite_count": in_text_cite_count,
         "alt_is_filename_ratio": alt_is_filename_ratio,
-        "docx_smoke": docx_smoke,
+        **docx_info,
     }
 
 
 # ---- 基线回归检测 ----
+
 
 def load_baseline(baseline_path: str) -> dict:
     """读取基线 expected.json。"""
@@ -234,7 +344,6 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
     """对比 scorecard 与 baseline，判定是否退化。"""
     checks: list[dict[str, Any]] = []
 
-    # min_png_per_ques: 每个 ques 至少 N 张图
     if "min_png_per_ques" in baseline:
         png_per = scorecard.get("figure_quality", {}).get("png_per_phase", {})
         threshold = baseline["min_png_per_ques"]
@@ -248,7 +357,6 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
                     "pass": ok,
                 })
 
-    # max_execute_error_rate
     if "max_execute_error_rate" in baseline:
         actual = scorecard.get("agent_quality", {}).get("execute_error_rate", 0)
         threshold = baseline["max_execute_error_rate"]
@@ -259,7 +367,6 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
             "pass": actual <= threshold,
         })
 
-    # max_empty_sections
     if "max_empty_sections" in baseline:
         actual = scorecard.get("paper_structure", {}).get("empty_section_count", 0)
         threshold = baseline["max_empty_sections"]
@@ -270,7 +377,6 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
             "pass": actual <= threshold,
         })
 
-    # min_image_coverage
     if "min_image_coverage" in baseline:
         actual = scorecard.get("figure_quality", {}).get("image_coverage", 0)
         threshold = baseline["min_image_coverage"]
@@ -281,7 +387,6 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
             "pass": actual >= threshold,
         })
 
-    # must_call_tools
     if "must_call_tools" in baseline:
         tool_counts = scorecard.get("agent_quality", {}).get("tool_calls_by_name", {})
         for tool_name in baseline["must_call_tools"]:
@@ -300,23 +405,12 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
     }
 
 
-# ---- 主入口 ----
+# ---- Scorecard 保存与对比 ----
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="E2E 评估：读取 trace + work_dir，输出 scorecard JSON"
-    )
-    parser.add_argument("--task-id", required=True, help="任务 ID")
-    parser.add_argument(
-        "--baseline", default=None, help="基线 expected.json 路径（可选，用于回归检测）"
-    )
-    args = parser.parse_args()
 
-    task_id: str = args.task_id
-    baseline_path: str | None = args.baseline
-
+def build_scorecard(task_id: str, baseline_path: str | None = None) -> dict[str, Any]:
+    """构建完整 scorecard。"""
     work_dir = WORK_DIR_ROOT / task_id
-
     events = load_trace(task_id)
     if not events:
         print(f"[eval] 无 trace 事件，仅基于产物输出", file=sys.stderr)
@@ -324,6 +418,7 @@ def main() -> None:
     scorecard: dict[str, Any] = {
         "task_id": task_id,
         "agent_quality": compute_agent_quality(events),
+        "llm_metrics": compute_llm_metrics(events),
         "figure_quality": compute_figure_quality(events, work_dir, work_dir / "res.md"),
         "paper_structure": compute_paper_structure(
             work_dir / "res.json", work_dir / "res.md", work_dir / "res.docx"
@@ -333,6 +428,115 @@ def main() -> None:
     if baseline_path:
         baseline = load_baseline(baseline_path)
         scorecard["regression_check"] = check_regression(scorecard, baseline)
+
+    return scorecard
+
+
+def save_scorecard(scorecard: dict[str, Any], task_id: str) -> Path:
+    """将 scorecard 写入 fixtures/baseline/.../scorecards/。"""
+    SCORECARDS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = SCORECARDS_DIR / f"{task_id}.json"
+    out_path.write_text(
+        json.dumps(scorecard, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[eval] scorecard 已保存: {out_path}", file=sys.stderr)
+    return out_path
+
+
+def load_scorecard(task_id: str) -> dict[str, Any] | None:
+    """从 scorecards 目录加载已保存的 scorecard。"""
+    path = SCORECARDS_DIR / f"{task_id}.json"
+    if not path.exists():
+        print(f"[eval] scorecard 不存在: {path}", file=sys.stderr)
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _flatten_metrics(scorecard: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """将 scorecard 中可比较的标量指标展平为 metric_path -> value。"""
+    flat: dict[str, Any] = {}
+    skip_keys = {"by_agent", "by_model", "turns_per_phase", "png_per_phase", "tool_calls_by_name", "empty_sections", "checks"}
+
+    for key, value in scorecard.items():
+        if key in ("task_id", "regression_check", "scorecard_compare"):
+            continue
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            if key in skip_keys:
+                flat[path] = value
+            else:
+                flat.update(_flatten_metrics(value, path))
+        else:
+            flat[path] = value
+    return flat
+
+
+def compare_scorecards(
+    new_scorecard: dict[str, Any], old_scorecard: dict[str, Any]
+) -> dict[str, Any]:
+    """对比两次 scorecard，输出数值指标增减。"""
+    old_flat = _flatten_metrics(old_scorecard)
+    new_flat = _flatten_metrics(new_scorecard)
+
+    all_keys = sorted(set(old_flat) | set(new_flat))
+    diffs: list[dict[str, Any]] = []
+
+    for key in all_keys:
+        old_val = old_flat.get(key)
+        new_val = new_flat.get(key)
+        if old_val == new_val:
+            continue
+        entry: dict[str, Any] = {
+            "metric": key,
+            "old": old_val,
+            "new": new_val,
+        }
+        if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
+            entry["delta"] = round(new_val - old_val, 3)
+            entry["improved"] = new_val > old_val if key.endswith("_coverage") or key.endswith("_count") and "empty" not in key and "error" not in key else new_val < old_val
+        diffs.append(entry)
+
+    return {
+        "old_task_id": old_scorecard.get("task_id"),
+        "new_task_id": new_scorecard.get("task_id"),
+        "diffs": diffs,
+    }
+
+
+# ---- 主入口 ----
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="E2E 评估：读取 trace + work_dir，输出 scorecard JSON"
+    )
+    parser.add_argument("--task-id", required=True, help="任务 ID")
+    parser.add_argument(
+        "--baseline", default=None, help="基线 expected.json 路径（可选，用于回归检测）"
+    )
+    parser.add_argument(
+        "--save-scorecard",
+        action="store_true",
+        help="将 scorecard 保存到 fixtures/baseline/2024高教杯C题/scorecards/",
+    )
+    parser.add_argument(
+        "--compare",
+        default=None,
+        metavar="OLD_TASK_ID",
+        help="与已保存的 scorecard 对比差异",
+    )
+    args = parser.parse_args()
+
+    task_id: str = args.task_id
+    scorecard = build_scorecard(task_id, args.baseline)
+
+    if args.compare:
+        old_scorecard = load_scorecard(args.compare)
+        if old_scorecard:
+            scorecard["scorecard_compare"] = compare_scorecards(scorecard, old_scorecard)
+
+    if args.save_scorecard:
+        save_scorecard(scorecard, task_id)
 
     print(json.dumps(scorecard, ensure_ascii=False, indent=2))
 

@@ -22,11 +22,11 @@
 
 | 阶段 | 状态 | 备注 |
 |------|------|------|
-| 阶段 0 · 工程护栏 | ⬜ 未开始 | Makefile / pytest（无 CI） |
+| 阶段 0 · 工程护栏 | ✅ 完成 | Makefile / pytest（无 CI） |
 | 阶段 1 · 纯函数基线 | ⬜ 未开始 | UserOutput / md 预处理 |
 | 阶段 2 · 内容质量 | ⬜ 未开始 | 引用、公式、Word 模板、Writer/Coder |
-| 阶段 3 · E2E 评估 | ⬜ 未开始 | 基线赛题 + eval 脚本 |
-| 阶段 4 · LLM 观测 | ⬜ 未开始 | request/response 结构化落盘 |
+| 阶段 3 · E2E 评估 | ✅ 完成 | 唯一赛题 2024高教杯C题 + eval 脚本 + scorecard 存档 |
+| 阶段 4 · LLM 观测 | ✅ 完成 | `llm.response` trace + eval 聚合 token/延迟 |
 
 *请在每阶段完成后更新上表。*
 

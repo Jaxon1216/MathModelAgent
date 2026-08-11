@@ -60,33 +60,92 @@ jq 'select(.event=="subtask.summary")' backend/logs/traces/{task_id}.jsonl
 cd backend && make check    # lint + test 一键
 ```
 
-### 例题 Fixture（三个已解析，直接加载构造 Problem）
+### 例题 Fixture（仅 2024 高教杯 C 题）
+
+评测与构造 `Problem` 只用这一道题，不要再加第二套 fixture。
 
 ```python
 from app.tests.conftest import load_problem_fixture, list_problem_fixtures
 
-# 三个例题：2023华数杯C题 / 2024高教杯C题 / 2025五一杯C题
-fixture = load_problem_fixture("2025五一杯C题")
+fixture = load_problem_fixture("2024高教杯C题")
 # fixture["ques_all"]        → 完整题目文本
 # fixture["data_files"]      → 数据文件清单
-# fixture["expected_ques_count"] → 子问题数
+# fixture["expected_ques_count"] → 3
 
 from app.schemas.request import Problem
 problem = Problem(task_id=..., ques_all=fixture["ques_all"])
 ```
 
-Fixture 文件：`backend/fixtures/problems/{name}.json`
+Fixture：`backend/fixtures/problems/2024高教杯C题.json`  
+基线：`backend/fixtures/baseline/2024高教杯C题/expected.json`
 
 ### E2E 评分卡（跑完任务后）
 
 ```bash
 cd backend
-uv run python scripts/eval_task.py --task-id {task_id}
+# 打分 + 回归检测 + 保存 scorecard
+make eval TASK_ID={task_id}
+
+# 或手动指定参数
 uv run python scripts/eval_task.py --task-id {task_id} \
-  --baseline fixtures/baseline/social-media/expected.json
+  --baseline fixtures/baseline/2024高教杯C题/expected.json \
+  --save-scorecard
+
+# 与上次基线对比
+uv run python scripts/eval_task.py --task-id {new_task_id} \
+  --baseline fixtures/baseline/2024高教杯C题/expected.json \
+  --compare {old_task_id}
 ```
 
-评分维度见 `docs/enhance/evaluation.md`：Agent 质量、绘图质量、论文结构。
+Scorecard 保存路径：`backend/fixtures/baseline/2024高教杯C题/scorecards/{task_id}.json`
+
+评分维度见 `docs/enhance/evaluation.md`：Agent 质量、LLM 成本、绘图质量、论文结构、docx 导出。
+
+### 标准迭代闭环
+
+改 Agent / prompt / workflow 时按此流程：
+
+1. **护栏** — `cd backend && make check`（lint + test 全绿）
+2. **跑基线** — 用 2024 高教杯 C 题跑一轮完整任务，记下 `task_id`
+3. **打分存档** — `make eval TASK_ID={task_id}`，scorecard 写入 `fixtures/baseline/.../scorecards/`
+4. **改代码** — 实施架构或 prompt 迭代
+5. **再跑护栏** — `make check`
+6. **重跑任务** — 同一赛题再跑一轮，得到新 `task_id`
+7. **对比打分** — `make eval` 或加 `--compare {old_task_id}`，看 `regression_check.all_pass` 与 `scorecard_compare.diffs`
+8. **正反馈才 commit** — `all_pass=true` 且无关键指标退化 → commit；否则查 trace 定位问题
+
+**退化时查什么日志：**
+
+```bash
+# 事件分布
+jq -r '.event' backend/logs/traces/{task_id}.jsonl | sort | uniq -c
+
+# 哪一 phase 失败
+jq 'select(.event=="phase.end" and .payload.success==false)' backend/logs/traces/{task_id}.jsonl
+
+# Coder 执行错误
+jq 'select(.event=="execute.done" and .payload.error!=null)' backend/logs/traces/{task_id}.jsonl
+
+# ReAct 重试
+jq 'select(.event=="react.reflect")' backend/logs/traces/{task_id}.jsonl
+
+# 每 phase 出图与 turns
+jq 'select(.event=="subtask.summary")' backend/logs/traces/{task_id}.jsonl
+
+# LLM token / 延迟
+jq 'select(.event=="llm.response")' backend/logs/traces/{task_id}.jsonl
+```
+
+**关注指标：**
+
+| 维度 | 关键字段 | 期望 |
+|------|----------|------|
+| Agent | `execute_error_rate`, `phase_fail`, `react_retry_total` | 错误率低、无 phase 失败 |
+| LLM | `total_tokens`, `total_latency_ms`, `by_agent` | 成本可控、无异常爆 token |
+| 绘图 | `png_per_phase` (ques* >=2), `image_coverage` (>=0.8) | 每问有图、Writer 引用图 |
+| 论文 | `empty_section_count` (0), `ref_count`, `in_text_cite_count` | 无空章节、有参考文献 |
+| 导出 | `docx_has_images`, `docx_has_math` | Word 含图片与公式对象 |
+| 回归 | `regression_check.all_pass` | 全部 pass 才可 commit |
 
 ## 边界
 

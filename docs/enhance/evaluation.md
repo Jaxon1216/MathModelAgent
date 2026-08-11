@@ -67,7 +67,14 @@ Trace 在任务运行中流式写 JSONL；**任务结束时**一次性从事件�
 | `phase_fail` | `phase.end success=false` | 整阶段失败，硬红线 |
 | `tool_calls_by_name` | `tool.call` 分布 | 行为画像（execute_code / load_skill / search_papers） |
 
-token/cost 等指标待 LLM 层补明细事件（方案 D）后再纳入。
+### A2. LLM 成本（`llm_metrics`）
+
+| 指标 | 来源 | 为何长期有用 |
+|------|------|--------------|
+| `llm_call_count` | `llm.response` 计数 | 总调用次数 |
+| `total_tokens` / `total_latency_ms` | `llm.response` 聚合 | 成本与耗时 |
+| `by_agent` | 按 Agent 分桶 | 定位哪个 Agent 爆 token |
+| `by_model` | 按 model 分桶 | 多模型混用时的成本分布 |
 
 ### B. 绘图质量
 
@@ -88,7 +95,7 @@ token/cost 等指标待 LLM 层补明细事件（方案 D）后再纳入。
 | `ref_count` | res.md 中 `[^n]:` 脚注定义数 | 参考文献是否生成 |
 | `in_text_cite_count` | 正文 `[^n]` 出现次数 | 引用是否进正文 |
 | `alt_is_filename_ratio` | 图片 alt 是否等于 `.png` 文件名 | 图注质量启发式 |
-| `docx_smoke` | res.docx 存在、含 drawing、含 oMath | 导出管线没挂 |
+| `docx_exists` / `docx_has_images` / `docx_has_math` | res.docx 解析（python-docx） | 导出管线没挂、图/公式是否嵌入 |
 
 格式类细节（符号表语法等）→ 单测覆盖，不进跑分卡。
 
@@ -113,7 +120,6 @@ token/cost 等指标待 LLM 层补明细事件（方案 D）后再纳入。
 {
   "must_call_tools": ["execute_code", "load_skill"],
   "min_png_per_ques": 2,
-  "min_eda_png": 5,
   "max_execute_error_rate": 0.15,
   "max_empty_sections": 0,
   "min_image_coverage": 0.8
@@ -122,7 +128,8 @@ token/cost 等指标待 LLM 层补明细事件（方案 D）后再纳入。
 
 失败时查 trace 哪 phase 退化，而不是盯已修好的格式细节。
 
-Fixture 路径：`backend/fixtures/baseline/social-media/`（输入附件 + expected.json）。
+唯一基线赛题：`backend/fixtures/problems/2024高教杯C题.json`  
+期望指标：`backend/fixtures/baseline/2024高教杯C题/expected.json`
 
 ---
 
@@ -136,7 +143,12 @@ cd backend && make test
 # 记下 task_id
 
 # 3. 打分（阶段 3 实现）
-python scripts/eval_task.py --task-id {task_id} --baseline fixtures/baseline/social-media/expected.json
+cd backend
+make eval TASK_ID={task_id}
+# 或带对比
+uv run python scripts/eval_task.py --task-id {new_id} \
+  --baseline fixtures/baseline/2024高教杯C题/expected.json \
+  --compare {old_id} --save-scorecard
 ```
 
 本地 `make test` + 改 Agent 后跑基线 + eval；不做 CI。
