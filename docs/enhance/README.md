@@ -11,6 +11,8 @@
 | [current-state.md](./current-state.md) | 现状盘点：观测、测试、导出管线、已知问题 |
 | [iteration-plan.md](./iteration-plan.md) | 分阶段迭代计划、原因、验收标准、分支策略 |
 | [evaluation.md](./evaluation.md) | 评测指标：哪些值得追、怎么跑、golden trace |
+| [sibling-references.md](./sibling-references.md) | 同级项目借鉴：S–B 路径与价值 |
+| [changelog.md](./changelog.md) | 质量迭代记录 |
 
 ## 协作方式
 
