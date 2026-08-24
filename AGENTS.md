@@ -169,4 +169,5 @@ jq 'select(.event=="llm.response")' backend/logs/traces/{task_id}.jsonl
 - [`CLAUDE.md`](CLAUDE.md) — 命令、结构、代码风格
 - [`docs/enhance/`](docs/enhance/) — 质量提升计划与现状
 - 当想借鉴同级项目提升画图、写作或效率时，参考 [`docs/enhance/sibling-references.md`](docs/enhance/sibling-references.md)
+- 当想理解各 Agent 上下文如何流转、或排查论文里出现「按要求不用某方法」这类过程回声时，参考 [`docs/enhance/runtime-context.md`](docs/enhance/runtime-context.md)
 - 质量迭代记录见 [`docs/enhance/changelog.md`](docs/enhance/changelog.md)

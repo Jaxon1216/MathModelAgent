@@ -12,6 +12,7 @@
 | [iteration-plan.md](./iteration-plan.md) | 分阶段迭代计划、原因、验收标准、分支策略 |
 | [evaluation.md](./evaluation.md) | 评测指标：哪些值得追、怎么跑、golden trace |
 | [sibling-references.md](./sibling-references.md) | 同级项目借鉴：S–B 路径与价值 |
+| [runtime-context.md](./runtime-context.md) | 运行时：各 Agent 上下文与指令回声 |
 | [changelog.md](./changelog.md) | 质量迭代记录 |
 
 ## 协作方式
