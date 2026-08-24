@@ -77,7 +77,17 @@ problem = Problem(task_id=..., ques_all=fixture["ques_all"])
 ```
 
 Fixture：`backend/fixtures/problems/2024高教杯C题.json`  
-基线：`backend/fixtures/baseline/2024高教杯C题/expected.json`
+阈值：`backend/fixtures/baseline/2024高教杯C题/expected.json`
+
+### 质量基线（唯一对照）
+
+唯一保留的 E2E 基线任务是 **`20260812-163504-32b726a1`**（2026-08-12）。ques 各 4 张图、`image_coverage=1.0`、无空章节、Word 含图与公式。不要把同日更早的 `044127` / `070143` 当基线。
+
+| 路径 | 内容 |
+|------|------|
+| `backend/fixtures/baseline/2024高教杯C题/scorecards/20260812-163504-32b726a1.json` | 评分卡（进 git） |
+| `backend/project/work_dir/20260812-163504-32b726a1/` | 论文与图（本地产物，不进 git） |
+| `backend/logs/traces/20260812-163504-32b726a1.jsonl` | 该轮 trace（不进 git） |
 
 ### E2E 评分卡（跑完任务后）
 
@@ -91,13 +101,13 @@ uv run python scripts/eval_task.py --task-id {task_id} \
   --baseline fixtures/baseline/2024高教杯C题/expected.json \
   --save-scorecard
 
-# 与上次基线对比
+# 与质量基线对比
 uv run python scripts/eval_task.py --task-id {new_task_id} \
   --baseline fixtures/baseline/2024高教杯C题/expected.json \
-  --compare {old_task_id}
+  --compare 20260812-163504-32b726a1
 ```
 
-Scorecard 保存路径：`backend/fixtures/baseline/2024高教杯C题/scorecards/{task_id}.json`
+新任务 scorecard 写入：`backend/fixtures/baseline/2024高教杯C题/scorecards/{task_id}.json`
 
 评分维度见 `docs/enhance/evaluation.md`：Agent 质量、LLM 成本、绘图质量、论文结构、docx 导出。
 
@@ -111,7 +121,7 @@ Scorecard 保存路径：`backend/fixtures/baseline/2024高教杯C题/scorecards
 4. **改代码** — 实施架构或 prompt 迭代
 5. **再跑护栏** — `make check`
 6. **重跑任务** — 同一赛题再跑一轮，得到新 `task_id`
-7. **对比打分** — `make eval` 或加 `--compare {old_task_id}`，看 `regression_check.all_pass` 与 `scorecard_compare.diffs`
+7. **对比打分** — `make eval` 或加 `--compare 20260812-163504-32b726a1`，看 `regression_check.all_pass` 与 `scorecard_compare.diffs`
 8. **正反馈才 commit** — `all_pass=true` 且无关键指标退化 → commit；否则查 trace 定位问题
 
 **退化时查什么日志：**
