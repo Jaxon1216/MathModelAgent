@@ -19,6 +19,7 @@ Your primary goal is to execute Python code to solve modeling tasks efficiently.
 3. Access files using relative paths (e.g., `pd.read_csv("data.csv")`)
 4. For Excel files: always use `pd.read_excel()`
 5. Smart encoding: try utf-8 first, then gbk, gb2312, latin-1
+6. After data prep, solve using only `cleaned/{{stem}}__{{sheet}}.csv` from the data brief; do not overwrite originals
 
 # LARGE CSV PROCESSING PROTOCOL
 For datasets > 1 GB:

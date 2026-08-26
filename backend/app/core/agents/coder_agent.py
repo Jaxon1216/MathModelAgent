@@ -17,6 +17,7 @@ from app.core.prompts import CODER_PROMPT
 from app.core.prompts import (
     get_reflection_prompt,
     get_completion_check_prompt,
+    get_data_prep_completion_prompt,
     get_figure_missing_prompt,
 )
 from app.core.skills.loader import SkillLoader
@@ -55,6 +56,7 @@ class CoderAgent(Agent):
         self.is_first_run = True
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
+        self._data_brief = ""
 
         # Skills Loader：启动时扫描 catalog/ 元数据
         self._skill_loader = SkillLoader()
@@ -78,17 +80,23 @@ class CoderAgent(Agent):
         assert self.code_interpreter is not None, "code_interpreter 未初始化"
         self.code_interpreter.add_section(subtask_title)
 
-        # 如果是第一次运行，添加系统提示和数据集文件信息
+        # 首次对话：system + 数据口径（准备阶段为原始文件规则，解题阶段为 contract 渲染）
         if self.is_first_run:
-            logger.info("首次运行，添加系统提示和数据集文件信息")
+            logger.info("首次运行，添加系统提示和数据口径")
             self.is_first_run = False
             await self.append_chat_history(
                 {"role": "system", "content": self.system_prompt}
             )
+            brief = self._data_brief.strip()
+            if not brief:
+                brief = (
+                    f"当前文件夹下的数据集文件"
+                    f"{get_current_files(self.work_dir, 'data')}"
+                )
             await self.append_chat_history(
                 {
                     "role": "user",
-                    "content": f"当前文件夹下的数据集文件{get_current_files(self.work_dir, 'data')}",
+                    "content": brief,
                 }
             )
 
@@ -328,8 +336,10 @@ class CoderAgent(Agent):
                         await self.append_chat_history(
                             {"role": "assistant", "content": response.content or ""}
                         )
-                        check_prompt = get_completion_check_prompt(
-                            prompt, last_tool_output
+                        check_prompt = (
+                            get_data_prep_completion_prompt(prompt, last_tool_output)
+                            if subtask_title == "eda"
+                            else get_completion_check_prompt(prompt, last_tool_output)
                         )
                         if not images_ok and min_figs > 0:
                             check_prompt += get_figure_missing_prompt(
@@ -396,13 +406,30 @@ class CoderAgent(Agent):
 
         logger.info(f"{self.__class__.__name__}:完成:执行子任务: {subtask_title}")
 
+    def set_data_brief(self, data_brief: str) -> None:
+        """设置首次 user 消息中的数据口径（准备阶段或无表说明）。"""
+        self._data_brief = data_brief or ""
+
+    def reset_for_solve(self, data_brief: str) -> None:
+        """清空探查对话，解题时只保留产物说明书。kernel 与工作目录文件仍共用。
+
+        Args:
+            data_brief: contract 的限长渲染文本。
+        """
+        self.chat_history = []
+        self.current_token_count = 0
+        self.current_chat_turns = 0
+        self.is_first_run = True
+        self._data_brief = data_brief or ""
+        logger.info("Coder 对话已重置，进入求解阶段")
+
     @staticmethod
     def _min_figures_for_phase(phase: str) -> int:
         """返回子任务阶段要求的最低 png 数量。"""
         if phase.startswith("ques"):
             return 2
         if phase == "eda":
-            return 2
+            return 0
         if phase == "sensitivity_analysis":
             return 1
         return 0
@@ -414,7 +441,7 @@ class CoderAgent(Agent):
         elif subtask_title == "sensitivity_analysis":
             skill_names = ["sensitivity-analysis", "visualization", "figure-reporting"]
         elif subtask_title == "eda":
-            skill_names = ["eda", "visualization", "figure-reporting"]
+            skill_names = ["eda"]
         else:
             return
 

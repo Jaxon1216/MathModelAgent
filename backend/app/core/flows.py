@@ -7,6 +7,7 @@ from app.core.agents.modeler_agent import ModelerToCoder
 
 class Flows:
     """管理数学建模任务的求解流程和写作流程。"""
+
     def __init__(self, questions: dict[str, str | int]):
         self.flows: dict[str, dict] = {}
         self.questions: dict[str, str | int] = questions
@@ -31,10 +32,24 @@ class Flows:
         ]
         self.flows = {key: {} for key in seq}
 
+    def get_data_prep_prompt(self) -> str:
+        """生成建模前数据准备阶段的 Coder 提示（不依赖建模方案）。"""
+        background = self.questions.get("background", "")
+        return f"""
+对当前目录下的原始附件做数据清洗并落盘。问题背景：{background}
+
+必须遵守用户消息里的清洗口径：
+- 原始附件只读；忽略 result*.xlsx / result*.csv
+- 输出到 cleaned/，UTF-8 csv，一 sheet 一文件
+- 文件名 cleaned/{{附件主名}}__{{sheet名}}.csv（原 csv 的 sheet 用 Sheet1）
+- 不要画论文图，不要复杂建模
+- 结束前 print 已写出的 cleaned/ 文件列表、每表行数和列名
+"""
+
     def get_solution_flows(
         self, questions: dict[str, str | int], modeler_response: ModelerToCoder
     ):
-        """生成求解阶段的流程配置。
+        """生成求解阶段的流程配置（不含数据准备，准备已在建模前完成）。
 
         Args:
             questions: 包含各问题描述的字典。
@@ -52,6 +67,7 @@ class Flows:
         ques_flow = {
             key: {
                 "coder_prompt": f"""
+                        只读取 data_contract 中的 cleaned/ 路径，先校验行数与列名再求解。
                         参考建模手给出的解决方案{solutions.get(key, "")}
                         完成如下问题{value}
                     """,
@@ -59,15 +75,10 @@ class Flows:
             for key, value in questions_quesx.items()
         }
         flows = {
-            "eda": {
-                "coder_prompt": f"""
-                        参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
-                        对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
-                    """,
-            },
             **ques_flow,
             "sensitivity_analysis": {
                 "coder_prompt": f"""
+                        只读取 cleaned/ 下已校验的表。
                         参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
                         完成敏感性分析
                     """,
@@ -105,17 +116,24 @@ class Flows:
         coder_response: str,
         code_interpreter: BaseCodeInterpreter,
         config_template: dict,
+        data_inventory: str = "",
     ) -> str:
         """根据不同的key生成对应的writer_prompt
 
         Args:
             key: 任务类型
             coder_response: 代码执行结果
+            code_interpreter: 代码解释器，用于取该段 stdout。
+            config_template: 论文章节模板。
+            data_inventory: 预处理章用的表清单（不含整份 JSON / sample）。
 
         Returns:
             str: 生成的writer_prompt
         """
-        code_output = code_interpreter.get_code_output(key)
+        if key in getattr(code_interpreter, "section_output", {}):
+            code_output = code_interpreter.get_code_output(key)
+        else:
+            code_output = ""
 
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
@@ -126,9 +144,14 @@ class Flows:
             for key in questions_quesx_keys
         }
 
+        inventory = data_inventory or ""
         writer_prompt = {
             "eda": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["eda"]}
+                    问题背景{bgc},不需要编写代码。
+                    数据准备摘要：{coder_response}
+                    {inventory}
+                    不要粘贴整份 JSON 或大段 sample，不要复述过程指令。
+                    按照如下模板撰写：{config_template["eda"]}
                 """,
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""

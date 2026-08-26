@@ -4,6 +4,7 @@ from app.core.prompts.coder import CODER_PROMPT
 from app.core.prompts.writer import get_writer_prompt
 from app.core.prompts.shared import (
     get_completion_check_prompt,
+    get_data_prep_completion_prompt,
     get_figure_missing_prompt,
     get_reflection_prompt,
 )
@@ -16,5 +17,6 @@ __all__ = [
     "get_writer_prompt",
     "get_reflection_prompt",
     "get_completion_check_prompt",
+    "get_data_prep_completion_prompt",
     "get_figure_missing_prompt",
 ]

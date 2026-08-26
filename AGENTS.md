@@ -11,7 +11,7 @@
 主链路：
 
 ```
-Coordinator → Modeler → Coder → Writer → res.md → Pandoc → res.docx
+Coordinator → Coder(data_prep → cleaned/) → Modeler(读 data_contract) → Coder(reset 后求解) → Writer → res.md → Pandoc → res.docx
 ```
 
 - 后端：`backend/`（FastAPI + Redis + 本地 Jupyter 解释器）
@@ -36,6 +36,7 @@ Coder 只有 `execute_code`，参考代码须写在 skill 正文里。
 | 路径 | 用途 |
 |------|------|
 | `backend/app/core/workflow.py` | 任务主流程 |
+| `backend/app/utils/data_contract.py` | 清洗口径与 `data_contract.json` |
 | `backend/app/core/prompts/` | 各 Agent prompt |
 | `backend/app/config/md_template.toml` | Writer 章节内容模板（不是 Word 样式） |
 | `backend/app/utils/common_utils.py` | `md_2_docx()` 导出 |

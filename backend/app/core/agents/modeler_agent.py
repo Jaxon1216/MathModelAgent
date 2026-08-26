@@ -56,6 +56,7 @@ def repair_json(json_str: str) -> dict | None:
 
 class ModelerAgent(Agent):
     """建模手 Agent，分析问题类型并制定建模方案、求解方法和可视化策略。"""
+
     def __init__(
         self,
         task_id: str,
@@ -66,11 +67,16 @@ class ModelerAgent(Agent):
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = MODELER_PROMPT
 
-    async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(  # type: ignore[reportIncompatibleMethodOverride]
+        self,
+        coordinator_to_modeler: CoordinatorToModeler,
+        data_brief: str = "",
+    ) -> ModelerToCoder:
         """根据协调者拆解的问题生成建模方案。
 
         Args:
             coordinator_to_modeler: 协调者传递的结构化问题信息。
+            data_brief: 已清洗表的限长渲染文本；无表格时为机理题说明。
 
         Returns:
             ModelerToCoder 对象，包含各问题的建模解决方案。
@@ -78,10 +84,13 @@ class ModelerAgent(Agent):
         await self.append_chat_history(
             {"role": "system", "content": self.system_prompt}
         )
+        user_content = json.dumps(coordinator_to_modeler.questions, ensure_ascii=False)
+        if data_brief.strip():
+            user_content = f"{user_content}\n\n## 已清洗数据表\n{data_brief.strip()}"
         await self.append_chat_history(
             {
                 "role": "user",
-                "content": json.dumps(coordinator_to_modeler.questions),
+                "content": user_content,
             }
         )
 
@@ -112,7 +121,7 @@ class ModelerAgent(Agent):
             await self.append_chat_history(
                 {
                     "role": "user",
-                    "content": "你返回的JSON格式有误，请严格按照JSON格式重新输出，注意字符串值内的双引号必须转义为\\\"，不要包含未转义的特殊字符。",
+                    "content": '你返回的JSON格式有误，请严格按照JSON格式重新输出，注意字符串值内的双引号必须转义为\\"，不要包含未转义的特殊字符。',
                 }
             )
 

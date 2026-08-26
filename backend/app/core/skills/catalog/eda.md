@@ -12,7 +12,36 @@ description: 数据驱动题的 EDA 流程规范，含缺失值/异常值处理�
 
 ---
 
-## 数据驱动题 EDA 必须覆盖的六步
+# 清洗落盘口径（data_prep 必须遵守）
+
+- 原始附件只读，禁止覆盖、改名、挪走。
+- `result*.xlsx` / `result*.csv` 是答题模板，忽略。
+- 输出目录：`cleaned/`，UTF-8 csv，**一 sheet 一文件**。
+- 文件名：`{附件主名}__{sheet名}.csv`。主名去掉扩展名；sheet 名去掉 `/ \ : * ? " < > |`，空白改 `_`。
+- 单 sheet 或原来就是 csv：sheet 名用 `Sheet1`。
+- 例：`附件1.xlsx` 的「乡村现有耕地」→ `cleaned/附件1__乡村现有耕地.csv`
+- 禁止：`cleaned_附件1.csv`、把两张表拼成一个文件、自创文件名。
+- 本阶段**不要画论文图**。结束前 `print` 已写出的路径、行数、列名。
+
+```python
+from pathlib import Path
+import pandas as pd
+
+src = Path("附件1.xlsx")
+xls = pd.ExcelFile(src)
+for sheet in xls.sheet_names:
+    df = pd.read_excel(xls, sheet_name=sheet)
+    # ... 清洗 ...
+    safe_sheet = "".join(ch if ch not in r'/\:*?"<>|' else "_" for ch in sheet).replace(" ", "_")
+    out = Path("cleaned") / f"{src.stem}__{safe_sheet}.csv"
+    out.parent.mkdir(exist_ok=True)
+    df.to_csv(out, index=False, encoding="utf-8")
+    print(f"[cleaned] {out} rows={len(df)} cols={list(df.columns)}")
+```
+
+---
+
+## 数据驱动题清洗必须覆盖的步骤
 
 ```python
 import pandas as pd
@@ -52,7 +81,7 @@ for col in df.select_dtypes(include=[np.number]).columns:
     if outliers > 0:
         print(f"{col}: {outliers} 个异常值（{outliers/len(df):.1%}）")
 
-# 步骤 4：分布可视化 → 加载 visualization 技能后绘制直方图/箱线图
+# 步骤 4：分布可视化（可选，不进论文，本阶段不要 save_fig）
 
 # 步骤 5：相关性分析
 corr = df.select_dtypes(include=[np.number]).corr()

@@ -247,4 +247,5 @@ uv run python scripts/eval_task.py --task-id {task_id} \
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-25 | 数据准备挪到建模前；`data_contract.json` 落盘；解题 Coder 重置对话 |
 | 2026-08-07 | 初版：现状盘点 + 五阶段计划 + 分支策略 |

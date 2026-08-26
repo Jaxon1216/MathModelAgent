@@ -13,21 +13,20 @@
 - [x] eval 支持 `--save-scorecard` / `--compare` + `make eval`
 - [x] 基线收敛为唯一赛题 `2024高教杯C题`（不再维护 social-media / 另两道例题）
 
-## EDA / 数据预处理解耦（后续改造）
+## EDA / 数据预处理解耦（已落地：清洗先于建模）
 
-背景：当前 EDA 阶段三处联动强制画图，产出的诊断图（直方图、箱线图）不应算入论文插图预算。
-
-**脚本端（先改）：**
-- [ ] `coder_agent.py:_min_figures_for_phase` — eda 改为返回 0（不卡图片下限）
-- [ ] `coder_agent.py:_ensure_phase_skills` — eda 不预注入 `figure-reporting`（诊断图不被论文追踪）
-- [ ] `flows.py` — EDA prompt 去掉"可视化"，改为"数据清洗并保存清洗后数据到当前目录"
+- [x] 建模前 Coder 数据准备，产物 `cleaned/{主名}__{sheet}.csv` + `data_contract.json`
+- [x] 建模手读 contract 限长文本；解题 Coder 重置对话
+- [x] `coder_agent.py:_min_figures_for_phase` — eda 返回 0（不卡图片下限）
+- [x] `coder_agent.py:_ensure_phase_skills` — eda 只预注入 `eda`，不注入 `figure-reporting`
+- [x] `flows.py` — 数据准备 prompt 改为清洗落盘；求解 flows 不再含 eda
 - [x] 基线 `expected.json` 已不含 `min_eda_png`（EDA 图不进论文插图预算）
+- [x] `eda.md` 写死清洗文件名口径；诊断图标记为可选、不进论文
 
-**Skill 端（后续改）：**
-- [ ] `eda.md` 重构为数据预处理 skill，强化清洗流程：缺失值处理 → 数据类型转换 → 异常值处理 → 特征工程
-- [ ] 诊断概览（相关性热力图、分布图）标记为"可选，不进论文"（参考 MathModelHub `data-preprocess/SKILL.md`）
+**Skill 端（后续）：**
+- [ ] 诊断概览（相关性热力图、分布图）若需要，仍不进论文插图预算
 
-## 内容质量修复（阶段 2，未开始）
+## 内容质量修复（下一波：论文实质，未开始）
 
 见 `iteration-plan.md` 阶段 2：
 

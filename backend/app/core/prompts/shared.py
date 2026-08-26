@@ -65,6 +65,40 @@ Decision rules:
 """
 
 
+def get_data_prep_completion_prompt(prompt, text_to_gpt) -> str:
+    """生成数据准备阶段的完成检查提示词（不要求出图）。
+
+    Args:
+        prompt: 原始任务描述。
+        text_to_gpt: 最新执行结果。
+
+    Returns:
+        完成检查提示词字符串。
+    """
+    return f"""
+Please review whether data preparation is fully completed.
+
+Original task:
+{prompt}
+
+Latest execution results:
+{text_to_gpt}
+
+Check the following:
+1. Has each source sheet been written as UTF-8 csv under cleaned/?
+2. Do filenames follow {{stem}}__{{sheet}}.csv (csv sources use Sheet1)?
+3. Were original attachments and result* templates left untouched?
+4. Is there at least one csv in cleaned/?
+5. Is there a brief print of what was cleaned (missing values, dtypes, row counts)?
+
+Decision rules:
+- Do NOT create paper figures in this phase.
+- If everything above is done → respond with a brief cleaning summary. Do NOT call any tool.
+- If cleaned/ is empty or naming is wrong → call execute_code to fix it.
+- Keep total conversation turns minimal.
+"""
+
+
 def get_figure_missing_prompt(phase: str, current_count: int, min_count: int) -> str:
     """生成「本阶段图片不足，禁止退出」的强制补图提示词。
 

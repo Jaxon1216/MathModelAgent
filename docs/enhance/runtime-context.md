@@ -17,15 +17,20 @@ ques_all（前端一整段，赛题 + 用户旁注）
 CoordinatorAgent（一次性 JSON 拆题）
     │  questions: {title, background, ques_count, ques1…}
     ▼
-ModelerAgent（一次性 JSON 方案）
-    │  questions_solution: {eda, ques1…, sensitivity_analysis}
+CoderAgent 数据准备（若有 csv/xlsx，不含 result*）
+    │  cleaned/{主名}__{sheet}.csv
+    ▼
+后端 build_data_contract → data_contract.json（限长渲染文本给下游）
+    ▼
+ModelerAgent（一次性 JSON：ques* + sensitivity，无 eda key）
+    │  questions_solution
     ▼
 ┌─── 共享 Jupyter kernel（work_dir 文件持久）───┐
-│  CoderAgent  ← 同一 chat_history 跨 eda/ques*/sensitivity │
-│       │ code_response（最后一句助手话）+ created_images     │
+│  CoderAgent  ← 重置 chat_history 后求解 ques*/sensitivity │
+│       │ code_response + created_images                     │
 │       ▼                                                    │
 │  WriterAgent ← 同一 chat_history 跨所有章节                │
-│       │ 先 solution 循环写 eda/ques*/sensitivity            │
+│       │ 先写 eda（表清单+清洗摘要）再写 ques*               │
 │       │ 再 write 循环写摘要/重述/假设/评价                  │
 └────────────────────────────────────────────────────────────┘
     ▼
@@ -48,9 +53,9 @@ UserOutput 拼接 res.md → Pandoc res.docx
 | Agent | 实例数 | 历史跨度 | 输入 | 输出（下游真吃的） |
 |-------|--------|----------|------|-------------------|
 | Coordinator | 1，拆完即闲置 | 单次（JSON 失败会再塞一条 system） | 原始 `ques_all` | `questions` dict |
-| Modeler | 1，方案出完即闲置 | 单次（JSON 失败把坏输出回灌） | `json.dumps(questions)` **整包** | `questions_solution` |
-| Coder | 1 | **全程**：eda → ques1… → sensitivity | 每 phase 一条 user prompt + 预注入 3 份 skill | `code_response` = **最后一轮无工具调用的助手文本**；图文件名列表 |
-| Writer | 1 | **全程**：solution 各章 + 后置写作各章 | 每章一条超长 user prompt | `response_content` 原样进 `res.json` |
+| Modeler | 1，方案出完即闲置 | 单次 | 拆题 JSON + contract **限长渲染文本** | `questions_solution`（ques* / sensitivity） |
+| Coder | 1 | 数据准备一段历史；**reset 后**再跨 ques*/sensitivity | 准备阶段：原始文件名+命名口径；求解：contract 渲染文本 | `code_response`；图文件名；`cleaned/` 表 |
+| Writer | 1 | **全程**：solution 各章 + 后置写作各章 | eda 章只拿表清单+清洗摘要，不要整份 JSON | `response_content` 原样进 `res.json` |
 
 解释器 stdout **不**写入 `section_output`（本地 Jupyter 从未 `add_content`）。`flows.get_writer_prompt` 里的 `code_output` 对本地运行几乎是空串。Writer 主要吃 Coder 的 **收工总结句**。
 
@@ -73,19 +78,22 @@ UserOutput 拼接 res.md → Pandoc res.docx
 
 ### 3.3 Coder prompt（每问）
 
+数据准备在建模前单独跑，随后 `reset_for_solve` 清空对话。求解阶段首次消息是 contract 限长文本，不再是文件名列表。
+
 `flows.get_solution_flows`：
 
 ```
+只读取 cleaned/ 路径，先校验行数与列名再求解。
 参考建模手给出的解决方案{solutions[key]}
 完成如下问题{quesN 原文}
 ```
 
-再叠加：首次 system `CODER_PROMPT`、数据文件列表、visualization 等 **全文 skill**、ReAct 的 reflection / completion_check。
+再叠加：首次 system `CODER_PROMPT`、ques 阶段 visualization 等 **全文 skill**、ReAct 的 reflection / completion_check。
 
 completion_check **再次粘贴 Original task**（含禁令）。Coder 被要求「brief summary of what was accomplished」——模型习惯写成「按要求未使用方法 A，改用 B，R²=…」。  
 **这句话就是 `CoderToWriter.code_response`。**
 
-Coder 历史不重置：ques1 的禁令与总结，ques2 仍看得到。
+求解阶段 Coder 历史仍跨 ques1→quesN，但不再带着清洗全程。
 
 ### 3.4 Writer prompt（论文入口）
 
@@ -158,4 +166,5 @@ Writer system（`writer.py`）要求「输出纯 Markdown」「**保持与用户
 | `backend/app/core/agents/agent.py` | 压缩会强化「重要禁令」 |
 | `backend/app/core/prompts/shared.py` | completion_check 回贴 Original task |
 | `backend/app/models/user_output.py` | 各问正文再拼进摘要材料 |
+| `backend/app/utils/data_contract.py` | 清洗口径、contract 构建/校验/限长渲染 |
 | `backend/app/config/md_template.toml` | 章节该写什么（不含约束通道） |
