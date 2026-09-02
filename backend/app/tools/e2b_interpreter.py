@@ -40,7 +40,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
         instance = cls(task_id, work_dir, notebook_serializer)
         return instance
 
-    async def initialize(self, timeout: int = 3000):
+    async def initialize(self, timeout: int = 3000) -> None:
         """异步初始化沙箱环境"""
         try:
             self.sbx = await AsyncSandbox.create(
@@ -66,6 +66,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 if f.endswith((".csv", ".xlsx", ".ttf", ".otf", ".ttc"))
             ]
             logger.info(f"工作目录中的文件列表: {files}")
+            if self.sbx is None:
+                raise RuntimeError("E2B 沙箱未初始化")
 
             for file in files:
                 file_path = os.path.join(self.work_dir, file)
@@ -284,6 +286,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
         logger.info(f"text_to_gpt: {text_to_gpt}")
 
         combined_text = "\n".join(text_to_gpt)
+        self.record_execution_output(combined_text)
 
         # 在代码执行完成后，立即同步文件
         try:

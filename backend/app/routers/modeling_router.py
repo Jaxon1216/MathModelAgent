@@ -13,6 +13,7 @@ from app.utils.common_utils import (
     get_current_files,
     md_2_docx,
 )
+from app.utils.task_manifest import load_task_manifest, update_task_manifest
 import os
 import asyncio
 from typing import Dict, Tuple
@@ -31,6 +32,34 @@ router = APIRouter()
 
 # 任务注册表: task_id -> (asyncio.Task, asyncio.Event)
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
+
+
+def _update_route_manifest(
+    task_id: str,
+    *,
+    status: str,
+    failed_phase: str | None = None,
+    failure_reason: str | None = None,
+) -> None:
+    """在工作流边界补写终态，确保异常和 Pandoc 失败也可追踪。"""
+    work_dir = os.path.join("project", "work_dir", task_id)
+    previous = load_task_manifest(work_dir)
+    completed_phases = (
+        previous.get("completed_phases") if previous is not None else []
+    )
+    current_phase = previous.get("current_phase") if previous is not None else None
+    try:
+        update_task_manifest(
+            work_dir,
+            task_id=task_id,
+            status=status,
+            current_phase=current_phase,
+            completed_phases=completed_phases,
+            failed_phase=failed_phase,
+            failure_reason=failure_reason,
+        )
+    except Exception as exc:
+        logger.warning(f"任务终态 manifest 更新失败，不影响任务清理: {exc}")
 
 
 class ValidateApiKeyRequest(BaseModel):
@@ -315,25 +344,71 @@ async def run_modeling_task_async(
     task = asyncio.create_task(workflow.execute(problem))
     _active_tasks[task_id] = (task, cancel_event)
 
-    task_completed = False
     try:
         # 设置超时时间（5 小时）
         await asyncio.wait_for(task, timeout=3600 * 5)
-        task_completed = True
-
-        # 发送任务完成状态
-        await redis_manager.publish_message(
-            task_id,
-            SystemMessage(content="任务处理完成", type="success"),
-        )
+        manifest = load_task_manifest(os.path.join("project", "work_dir", task_id))
+        if manifest is not None and manifest.get("status") != "completed":
+            reason = (
+                manifest.get("failure_reason")
+                or manifest.get("status")
+                or "workflow incomplete"
+            )
+            await redis_manager.publish_message(
+                task_id,
+                SystemMessage(content=f"任务执行失败: {reason}", type="error"),
+            )
+        else:
+            try:
+                # 仅在 workflow 正常完成且 manifest 未标记部分失败时导出 docx。
+                md_2_docx(task_id)
+            except Exception as export_error:
+                logger.error(f"任务 {task_id} 导出 docx 失败: {export_error}")
+                _update_route_manifest(
+                    task_id,
+                    status="partial_failure",
+                    failed_phase="export",
+                    failure_reason=str(export_error),
+                )
+                await redis_manager.publish_message(
+                    task_id,
+                    SystemMessage(
+                        content=f"任务执行失败: {export_error}",
+                        type="error",
+                    ),
+                )
+            else:
+                _update_route_manifest(task_id, status="completed")
+                await redis_manager.publish_message(
+                    task_id,
+                    SystemMessage(content="任务处理完成", type="success"),
+                )
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
+        _update_route_manifest(
+            task_id,
+            status="cancelled",
+            failed_phase="cancelled",
+            failure_reason="任务被用户停止",
+        )
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content="任务已停止", type="warning"),
         )
     except Exception as e:
         logger.error(f"任务 {task_id} 执行失败: {e}")
+        previous = load_task_manifest(os.path.join("project", "work_dir", task_id))
+        completed = previous.get("completed_phases") if previous else []
+        _update_route_manifest(
+            task_id,
+            status="partial_failure" if completed else "failed",
+            failed_phase=(
+                previous.get("failed_phase") or previous.get("current_phase")
+                if previous
+                else "workflow"
+            ),
+            failure_reason=str(e),
+        )
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content=f"任务执行失败: {str(e)}", type="error"),
@@ -341,9 +416,6 @@ async def run_modeling_task_async(
     finally:
         # 从注册表中清理
         _active_tasks.pop(task_id, None)
-        # 仅在正常完成时转换 md 为 docx
-        if task_completed:
-            md_2_docx(task_id)
 
 
 class CancelTaskResponse(BaseModel):

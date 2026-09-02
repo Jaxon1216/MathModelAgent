@@ -4,5 +4,10 @@
   "min_png_per_ques": 2,
   "max_execute_error_rate": 0.15,
   "max_empty_sections": 0,
-  "min_image_coverage": 0.8
+  "min_image_coverage": 0.8,
+  "min_source_inspection_coverage": 1.0,
+  "max_writer_raw_ques_all_leaks": 0,
+  "max_writer_constraint_leaks": 0,
+  "max_manifest_missing_references": 0,
+  "max_handoff_budget_violations": 0
 }

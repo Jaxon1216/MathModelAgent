@@ -23,6 +23,7 @@ from app.core.prompts import (
 from app.core.skills.loader import SkillLoader
 from app.core.functions import get_coder_tools, get_coder_tools_anthropic
 from app.utils.common_utils import get_current_files
+from app.utils.source_inspection import redact_source_inspection_echoes
 
 # TODO: 时间等待过久，stop 进程
 # TODO: 支持 cuda
@@ -57,6 +58,8 @@ class CoderAgent(Agent):
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
         self._data_brief = ""
+        self._inspection_text = ""
+        self._active_phase: str | None = None
 
         # Skills Loader：启动时扫描 catalog/ 元数据
         self._skill_loader = SkillLoader()
@@ -66,7 +69,7 @@ class CoderAgent(Agent):
         else:
             self._tools = get_coder_tools(self._skill_loader)
 
-    async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:
         """执行代码手子任务，生成并运行代码。
 
         Args:
@@ -78,6 +81,8 @@ class CoderAgent(Agent):
         """
         logger.info(f"{self.__class__.__name__}:开始:执行子任务: {subtask_title}")
         assert self.code_interpreter is not None, "code_interpreter 未初始化"
+        if self._active_phase != subtask_title:
+            self._begin_phase(subtask_title)
         self.code_interpreter.add_section(subtask_title)
 
         # 首次对话：system + 数据口径（准备阶段为原始文件规则，解题阶段为 contract 渲染）
@@ -124,6 +129,7 @@ class CoderAgent(Agent):
                     f"最后错误信息: {last_error_message}"
                 )
                 return CoderToWriter(
+                    status="failed",
                     code_response=(
                         f"任务失败，超过最大尝试次数 {self.max_retries}，"
                         f"最后错误信息: {last_error_message}"
@@ -172,22 +178,7 @@ class CoderAgent(Agent):
                     tool_call = response.tool_calls[0]
                     tool_id = tool_call.id
 
-                    # ---- 构建 assistant 消息（含 tool_calls） ----
-                    assistant_msg: dict = {
-                        "role": "assistant",
-                        "content": response.content,
-                    }
-                    if response.reasoning_content:
-                        assistant_msg["reasoning_content"] = response.reasoning_content
-                    assistant_msg["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": tc.arguments},
-                        }
-                        for tc in response.tool_calls
-                    ]
-                    await self.append_chat_history(assistant_msg)
+                    await self.record_response(response, allow_compress=False)
 
                     await trace_recorder.emit(
                         self.task_id,
@@ -230,7 +221,12 @@ class CoderAgent(Agent):
                             phase=subtask_title,
                             skill_name=skill_name,
                             found=skill is not None,
+                            metadata_chars=len(
+                                self._skill_loader.get_description(skill_name) or ""
+                            ),
                             body_chars=len(skill.body) if skill else 0,
+                            preload_mode="on_demand",
+                            preloaded=False,
                         )
                         await self.append_chat_history(
                             {
@@ -301,13 +297,17 @@ class CoderAgent(Agent):
                                 }
                             )
                         else:
-                            last_tool_output = text_to_gpt
+                            safe_tool_output = redact_source_inspection_echoes(
+                                text_to_gpt,
+                                self._inspection_text,
+                            )
+                            last_tool_output = safe_tool_output
                             await self.append_chat_history(
                                 {
                                     "role": "tool",
                                     "tool_call_id": tool_id,
                                     "name": "execute_code",
-                                    "content": text_to_gpt,
+                                    "content": safe_tool_output,
                                 }
                             )
                         continue
@@ -333,13 +333,19 @@ class CoderAgent(Agent):
                             images_ok=images_ok,
                             will_continue=True,
                         )
-                        await self.append_chat_history(
-                            {"role": "assistant", "content": response.content or ""}
+                        await self.record_response(response, allow_compress=False)
+                        safe_latest_output = redact_source_inspection_echoes(
+                            last_tool_output,
+                            self._inspection_text,
                         )
                         check_prompt = (
-                            get_data_prep_completion_prompt(prompt, last_tool_output)
+                            get_data_prep_completion_prompt(
+                                subtask_title, safe_latest_output
+                            )
                             if subtask_title == "eda"
-                            else get_completion_check_prompt(prompt, last_tool_output)
+                            else get_completion_check_prompt(
+                                subtask_title, safe_latest_output
+                            )
                         )
                         if not images_ok and min_figs > 0:
                             check_prompt += get_figure_missing_prompt(
@@ -376,9 +382,7 @@ class CoderAgent(Agent):
                             will_continue=True,
                             blocked_exit=True,
                         )
-                        await self.append_chat_history(
-                            {"role": "assistant", "content": response.content or ""}
-                        )
+                        await self.record_response(response, allow_compress=False)
                         await self.append_chat_history(
                             {
                                 "role": "user",
@@ -390,10 +394,13 @@ class CoderAgent(Agent):
                         continue
 
                     logger.info("completion check 通过，子任务完成")
+                    await self.record_response(response, allow_compress=False)
                     await self._emit_subtask_summary(
                         subtask_title, subtask_turns, retry_count, created_images
                     )
+                    await self.compress_if_needed()
                     return CoderToWriter(
+                        status="success",
                         code_response=response.content,
                         created_images=created_images,
                     )
@@ -410,18 +417,34 @@ class CoderAgent(Agent):
         """设置首次 user 消息中的数据口径（准备阶段或无表说明）。"""
         self._data_brief = data_brief or ""
 
+    def set_inspection_text(self, inspection_text: str) -> None:
+        """设置当前 EDA 阶段的内存过滤基准，不注入 Coder history。"""
+        self._inspection_text = inspection_text or ""
+
     def reset_for_solve(self, data_brief: str) -> None:
         """清空探查对话，解题时只保留产物说明书。kernel 与工作目录文件仍共用。
 
         Args:
             data_brief: contract 的限长渲染文本。
         """
-        self.chat_history = []
-        self.current_token_count = 0
+        self._active_phase = None
+        self._data_brief = data_brief or ""
+        self._inspection_text = ""
+        self._reset_phase_state()
+        logger.info("Coder 对话已重置，进入求解阶段")
+
+    def _begin_phase(self, phase: str) -> None:
+        """开始独立 Coder phase，只重置上下文，不重启共享 kernel。"""
+        self._active_phase = phase
+        self._reset_phase_state()
+        self.history_scope = phase
+        logger.info(f"Coder 开始独立上下文阶段: {phase}")
+
+    def _reset_phase_state(self) -> None:
+        """重置单阶段循环状态，保留解释器、工作目录和数据材料。"""
+        self.reset_history(self._active_phase or "default")
         self.current_chat_turns = 0
         self.is_first_run = True
-        self._data_brief = data_brief or ""
-        logger.info("Coder 对话已重置，进入求解阶段")
 
     @staticmethod
     def _min_figures_for_phase(phase: str) -> int:
@@ -435,21 +458,23 @@ class CoderAgent(Agent):
         return 0
 
     async def _ensure_phase_skills(self, subtask_title: str) -> None:
-        """子任务开始时预注入必备技能，避免 ques 阶段跳过 visualization 导致零产出。"""
+        """子任务开始时注入轻量技能索引，正文由 ``load_skill`` 按需获取。"""
         if subtask_title.startswith("ques"):
             skill_names = ["mathematical-modeling", "visualization", "figure-reporting"]
         elif subtask_title == "sensitivity_analysis":
             skill_names = ["sensitivity-analysis", "visualization", "figure-reporting"]
         elif subtask_title == "eda":
-            skill_names = ["eda"]
+            # EDA 是清洗首轮的专用规则，保留正文以避免改变既有清洗行为。
+            skill_names = []
+            await self._inject_skill_content("eda", subtask_title)
         else:
             return
 
         for skill_name in skill_names:
-            await self._inject_skill_content(skill_name, subtask_title)
+            await self._inject_skill_metadata(skill_name, subtask_title)
 
     async def _inject_skill_content(self, skill_name: str, subtask_title: str) -> None:
-        """将技能 body 注入对话历史（等效 load_skill，不消耗 tool 轮次）。"""
+        """保留 EDA 专用技能 body 的兼容预注入边界。"""
         skill = self._skill_loader.get_skill(skill_name)
         if skill:
             skill_content = (
@@ -473,10 +498,48 @@ class CoderAgent(Agent):
             phase=subtask_title,
             skill_name=skill_name,
             found=skill is not None,
+            metadata_chars=len(
+                self._skill_loader.get_description(skill_name) or ""
+            ),
             body_chars=len(skill.body) if skill else 0,
             preloaded=True,
+            preload_mode="eda_body",
         )
         await self.append_chat_history({"role": "user", "content": skill_content})
+
+    async def _inject_skill_metadata(
+        self, skill_name: str, subtask_title: str
+    ) -> None:
+        """只注入 L1 描述和加载提示，避免每个求解 phase 重复复制正文。"""
+        description = self._skill_loader.get_description(skill_name)
+        if description is None:
+            content = f"技能 '{skill_name}' 不存在。请勿假设其正文已加载。"
+        else:
+            content = (
+                f'<skill-metadata name="{skill_name}">\n'
+                f"描述：{description}\n"
+                "正文尚未加载；开始对应工作前必须调用 "
+                f'load_skill("{skill_name}") 获取完整规则。'
+                "\n</skill-metadata>"
+            )
+        logger.info(f"注入技能 metadata: {skill_name} ({subtask_title})")
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"代码手注入技能索引: {skill_name}"),
+        )
+        await trace_recorder.emit(
+            self.task_id,
+            "skill.load",
+            agent=self.__class__.__name__,
+            phase=subtask_title,
+            skill_name=skill_name,
+            found=description is not None,
+            metadata_chars=len(description or ""),
+            body_chars=0,
+            preloaded=True,
+            preload_mode="metadata",
+        )
+        await self.append_chat_history({"role": "user", "content": content})
 
     @staticmethod
     def _summarize_tool_args(tool_name: str, arguments: str) -> str:
@@ -517,4 +580,8 @@ class CoderAgent(Agent):
             retries=retries,
             png_count=png_count,
             csv_count=csv_count,
+            history_messages=len(self.chat_history),
+            history_chars=self._history_chars(),
+            history_token_count=self.current_token_count,
+            compression_count=self.compression_count,
         )

@@ -1,13 +1,17 @@
 """协调者 Agent 模块，负责识别用户意图并拆解数学建模问题。"""
 
 import asyncio
+import json
+import re
+
+from pydantic import ValidationError
+
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import COORDINATOR_PROMPT
-import json
-import re
-from app.utils.log_util import logger
 from app.schemas.A2A import CoordinatorToModeler
+from app.utils.log_util import logger
+from app.utils.problem_context import normalize_coordinator_payload
 
 MAX_JSON_RETRIES = 3
 
@@ -24,7 +28,7 @@ class CoordinatorAgent(Agent):
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = COORDINATOR_PROMPT
 
-    async def run(self, ques_all: str) -> CoordinatorToModeler:  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(self, ques_all: str) -> CoordinatorToModeler:
         """解析用户输入的问题并格式化为结构化 JSON。
 
         Args:
@@ -45,6 +49,7 @@ class CoordinatorAgent(Agent):
                     history=self.chat_history,
                     agent_name=self.__class__.__name__,
                 )
+                await self.record_response(response)
                 json_str = response.content or ""
 
                 # 清理 JSON 字符串
@@ -54,18 +59,22 @@ class CoordinatorAgent(Agent):
                 if not json_str:
                     raise ValueError("返回的 JSON 字符串为空")
 
-                questions = json.loads(json_str)
-                ques_count = questions["ques_count"]
-                logger.info(f"questions:{questions}")
-                return CoordinatorToModeler(questions=questions, ques_count=ques_count)
+                payload = json.loads(json_str)
+                normalized = normalize_coordinator_payload(payload)
+                logger.info(f"questions:{normalized['questions']}")
+                return CoordinatorToModeler.model_validate(normalized)
 
-            except (json.JSONDecodeError, ValueError, KeyError) as e:
+            except (json.JSONDecodeError, ValueError, KeyError, ValidationError) as e:
                 attempt += 1
                 last_error = e
                 logger.warning(f"解析失败 (尝试 {attempt}/{MAX_JSON_RETRIES}): {str(e)}")
 
                 # 添加错误反馈提示
-                error_prompt = f"⚠️ 上次响应格式错误: {str(e)}。请严格输出JSON格式"
+                error_prompt = (
+                    f"⚠️ 上次响应格式错误: {str(e)}。请严格输出 JSON，"
+                    "并将执行约束放入顶层 constraints 数组，"
+                    "不要把约束重复写入 background 或 quesN。"
+                )
                 await self.append_chat_history({
                     "role": "system",
                     "content": self.system_prompt + "\n" + error_prompt

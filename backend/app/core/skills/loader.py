@@ -90,6 +90,14 @@ class SkillLoader:
             for name, meta in self._metadata_cache.items()
         )
 
+    def get_description(self, name: str) -> str | None:
+        """返回单个技能的 L1 描述，不触发 body 读取。"""
+        metadata = self._metadata_cache.get(name)
+        if metadata is None:
+            return None
+        description = metadata.get("description")
+        return str(description) if description is not None else ""
+
     def get_skill(self, name: str) -> Skill | None:
         """按需加载完整技能。
 

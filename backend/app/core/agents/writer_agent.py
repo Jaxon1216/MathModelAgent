@@ -13,6 +13,7 @@ from app.schemas.response import SystemMessage, WriterMessage
 import json
 from app.core.functions import writer_tools, writer_tools_anthropic
 from app.schemas.A2A import WriterResponse
+from app.utils.phase_results import bound_writer_user_prompt
 
 
 # TODO: 并行 parallel
@@ -40,7 +41,7 @@ class WriterAgent(Agent):
         self.system_prompt = get_writer_prompt(format_output)
         self.available_images: list[str] = []
 
-    async def run(  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(
         self,
         prompt: str,
         available_images: list[str] | None = None,
@@ -54,30 +55,22 @@ class WriterAgent(Agent):
             sub_title: 子任务标题
         """
         logger.info(f"subtitle是:{sub_title}")
+        self.reset_history(f"section:{sub_title or 'unknown'}")
 
         # 根据 api_type 选择 tools 格式
         api_type = self.model.api_type
         tools = writer_tools_anthropic if api_type == ApiType.ANTHROPIC else writer_tools
 
-        if self.is_first_run:
-            self.is_first_run = False
-            await self.append_chat_history(
-                {"role": "system", "content": self.system_prompt}
-            )
+        self.is_first_run = False
+        await self.append_chat_history(
+            {"role": "system", "content": self.system_prompt}
+        )
 
         if available_images:
             self.available_images = available_images
-            image_lines = "\n".join(
-                [f"- ![{img}]({img})" for img in available_images]
-            )
-            image_prompt = (
-                f"\n\n【必须插入的图片列表】\n"
-                f"以下图片是代码手生成的，你必须在论文相关段落后用 Markdown 格式逐一插入：\n"
-                f"{image_lines}\n"
-                f"插入格式为独占一行的 ![描述](文件名)，每张图片后需配3行以上的分析解读。\n"
-            )
+            image_prompt = bound_writer_user_prompt("", available_images)
             logger.info(f"image_prompt是:{image_prompt}")
-            prompt = prompt + image_prompt
+            prompt = bound_writer_user_prompt(prompt, available_images)
 
         logger.info(f"{self.__class__.__name__}:开始:执行对话")
 
@@ -115,20 +108,7 @@ class WriterAgent(Agent):
                     ),
                 )
 
-                # 更新对话历史 - 添加助手的响应
-                assistant_msg: dict = {"role": "assistant", "content": response.content}
-                if response.reasoning_content:
-                    assistant_msg["reasoning_content"] = response.reasoning_content
-                if response.tool_calls:
-                    assistant_msg["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": tc.arguments},
-                        }
-                        for tc in response.tool_calls
-                    ]
-                await self.append_chat_history(assistant_msg)
+                await self.record_response(response, allow_compress=False)
 
                 try:
                     assert self.scholar is not None, "scholar 未初始化"
@@ -159,9 +139,10 @@ class WriterAgent(Agent):
                     sub_title=sub_title,
                 )
                 response_content = next_response.content or ""
+                await self.record_response(next_response)
         else:
             response_content = response.content or ""
-        self.chat_history.append({"role": "assistant", "content": response_content, "reasoning_content": response.reasoning_content} if response.reasoning_content else {"role": "assistant", "content": response_content})
+            await self.record_response(response)
         logger.info(f"{self.__class__.__name__}:完成:执行对话")
         return WriterResponse(response_content=response_content, footnotes=footnotes)
 
@@ -176,10 +157,7 @@ class WriterAgent(Agent):
                 history=self.chat_history, agent_name=self.__class__.__name__
             )
             response_content = response.content or ""
-            summary_msg: dict = {"role": "assistant", "content": response_content}
-            if response.reasoning_content:
-                summary_msg["reasoning_content"] = response.reasoning_content
-            await self.append_chat_history(summary_msg)
+            await self.record_response(response)
             return response_content
         except Exception as e:
             logger.error(f"总结生成失败: {str(e)}")

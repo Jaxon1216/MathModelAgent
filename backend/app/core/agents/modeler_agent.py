@@ -6,6 +6,7 @@ from app.core.llm.llm import LLM
 from app.core.prompts import MODELER_PROMPT
 from app.schemas.A2A import CoordinatorToModeler, ModelerToCoder
 from app.utils.log_util import logger
+from app.utils.problem_context import render_execution_constraints
 import json
 import re
 from icecream import ic  # type: ignore[import-unresolved]
@@ -67,7 +68,7 @@ class ModelerAgent(Agent):
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = MODELER_PROMPT
 
-    async def run(  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(
         self,
         coordinator_to_modeler: CoordinatorToModeler,
         data_brief: str = "",
@@ -87,6 +88,11 @@ class ModelerAgent(Agent):
         user_content = json.dumps(coordinator_to_modeler.questions, ensure_ascii=False)
         if data_brief.strip():
             user_content = f"{user_content}\n\n## 已清洗数据表\n{data_brief.strip()}"
+        constraint_prompt = render_execution_constraints(
+            coordinator_to_modeler.constraints
+        )
+        if constraint_prompt:
+            user_content = f"{user_content}\n\n{constraint_prompt}"
         await self.append_chat_history(
             {
                 "role": "user",
@@ -100,6 +106,7 @@ class ModelerAgent(Agent):
                 history=self.chat_history,
                 agent_name=self.__class__.__name__,
             )
+            await self.record_response(response)
 
             json_str = response.content
             if not json_str:
@@ -108,16 +115,15 @@ class ModelerAgent(Agent):
             questions_solution = repair_json(json_str)
             if questions_solution:
                 ic(questions_solution)
-                return ModelerToCoder(questions_solution=questions_solution)
+                return ModelerToCoder(
+                    questions_solution=questions_solution,
+                    constraints=coordinator_to_modeler.constraints,
+                )
 
             attempt += 1
             logger.warning(
                 f"JSON 解析失败 (第{attempt}/{MAX_JSON_RETRIES}次)，请求模型重新生成"
             )
-            retry_msg: dict = {"role": "assistant", "content": json_str}
-            if response.reasoning_content:
-                retry_msg["reasoning_content"] = response.reasoning_content
-            await self.append_chat_history(retry_msg)
             await self.append_chat_history(
                 {
                     "role": "user",

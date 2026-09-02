@@ -15,7 +15,7 @@ async def create_interpreter(
     task_id: str,
     work_dir: str,
     notebook_serializer: NotebookSerializer,
-    timeout=3000,
+    timeout: int = 3000,
 ):
     """创建代码解释器实例。
 
@@ -46,7 +46,7 @@ async def create_interpreter(
             work_dir=work_dir,
             notebook_serializer=notebook_serializer,
         )
-        await interp.initialize(timeout=timeout)  # type: ignore[reportCallIssue]
+        await interp.initialize(timeout=timeout)
         return interp
     elif kind == "local":
         interp = LocalCodeInterpreter(
@@ -54,7 +54,7 @@ async def create_interpreter(
             work_dir=work_dir,
             notebook_serializer=notebook_serializer,
         )
-        await interp.initialize()
+        await interp.initialize(timeout=timeout)
         return interp
     else:
         raise ValueError(f"未知 interpreter 类型：{kind}")

@@ -38,6 +38,7 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "shap>=0.51.0",
     "statsmodels>=0.14.4",
+    "xlrd>=2.0.1",
     "uvicorn[standard]>=0.34.0",
     "websocket>=0.2.1",
     "xgboost>=3.0.0",
@@ -126,4 +127,3 @@ docstring-code-format = false
 # This only has an effect when the `docstring-code-format` setting is
 # enabled.
 docstring-code-line-length = "dynamic"
-

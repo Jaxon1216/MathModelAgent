@@ -31,24 +31,21 @@ Please provide an explanation of what went wrong and Remenber call the function 
 """
 
 
-def get_completion_check_prompt(prompt, text_to_gpt) -> str:
+def get_completion_check_prompt(phase_label: str, latest_output: str) -> str:
     """生成任务完成检查提示词。
 
     Args:
-        prompt: 原始任务描述。
-        text_to_gpt: 最新执行结果。
+        phase_label: 当前子任务标题。
+        latest_output: 最近一次执行结果。
 
     Returns:
         完成检查提示词字符串。
     """
     return f"""
-Please review whether the current subtask is fully completed.
+Please review whether phase "{phase_label}" is fully completed.
 
-Original task:
-{prompt}
-
-Latest execution results:
-{text_to_gpt}
+Latest execution output:
+{latest_output}
 
 Check the following:
 1. Have all required data processing and modeling steps been completed?
@@ -65,24 +62,23 @@ Decision rules:
 """
 
 
-def get_data_prep_completion_prompt(prompt, text_to_gpt) -> str:
+def get_data_prep_completion_prompt(
+    phase_label: str, latest_output: str
+) -> str:
     """生成数据准备阶段的完成检查提示词（不要求出图）。
 
     Args:
-        prompt: 原始任务描述。
-        text_to_gpt: 最新执行结果。
+        phase_label: 当前子任务标题。
+        latest_output: 最近一次执行结果。
 
     Returns:
-        完成检查提示词字符串。
+        数据准备完成检查提示词字符串。
     """
     return f"""
-Please review whether data preparation is fully completed.
+Please review whether data preparation phase "{phase_label}" is fully completed.
 
-Original task:
-{prompt}
-
-Latest execution results:
-{text_to_gpt}
+Latest execution output:
+{latest_output}
 
 Check the following:
 1. Has each source sheet been written as UTF-8 csv under cleaned/?

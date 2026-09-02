@@ -2,6 +2,7 @@
 
 import os
 import time
+from typing import Literal
 
 import jupyter_client
 
@@ -32,7 +33,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.km, self.kc = None, None
         self.interrupt_signal = False
 
-    async def initialize(self):
+    async def initialize(self, timeout: int = 3000) -> None:
         # 本地内核一般不需异步上传文件，直接切换目录即可
         # 初始化 Jupyter 内核管理器和客户端
         logger.info("初始化本地内核")
@@ -50,7 +51,9 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 SystemMessage(content=font_msg, type=font_type),
             )
 
-    def _pre_execute_code(self) -> tuple[str | None, str]:
+    def _pre_execute_code(
+        self,
+    ) -> tuple[str | None, Literal["info", "warning", "success", "error"]]:
         """执行 matplotlib 初始化，并解析字体加载结果供前端展示。
 
         Returns:
@@ -148,6 +151,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
         logger.info(f"text_to_gpt: {text_to_gpt}")
         combined_text = "\n".join(text_to_gpt)
+        self.record_execution_output(combined_text)
 
         await self._push_to_websocket(content_to_display)
 
@@ -192,14 +196,8 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         return "other"
 
     def _snapshot_artifacts(self) -> set[str]:
-        """快照 work_dir 下 png/csv/npy 文件集合。"""
-        if not os.path.isdir(self.work_dir):
-            return set()
-        return {
-            name
-            for name in os.listdir(self.work_dir)
-            if name.lower().endswith((".png", ".csv", ".npy"))
-        }
+        """快照 work_dir 下可交接的文件集合。"""
+        return super()._snapshot_artifacts()
 
     def execute_code_(self, code) -> list[tuple[str, str]]:
         assert self.kc is not None

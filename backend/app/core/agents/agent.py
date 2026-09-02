@@ -2,8 +2,12 @@
 
 import asyncio
 from typing import Any
+
 from app.core.llm.llm import LLM, simple_chat
+from app.services.trace_recorder import trace_recorder
 from app.utils.log_util import logger
+from app.utils.problem_context import redact_execution_constraints
+from app.utils.source_inspection import redact_source_inspection_echoes
 
 # TODO: 评估任务完成情况，rethinking
 
@@ -11,6 +15,63 @@ from app.utils.log_util import logger
 _CHARS_PER_TOKEN = 3
 # 触发压缩的 token 占比阈值（相对 context_window）
 _DEFAULT_TOKEN_THRESHOLD_RATIO = 0.75
+_MAX_FACT_SUMMARY_CHARS = 6000
+_FACT_MARKERS = (
+    "path",
+    "file",
+    "csv",
+    "xlsx",
+    "png",
+    "jpg",
+    "npy",
+    "metric",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "rmse",
+    "mae",
+    "mse",
+    "r2",
+    "auc",
+    "score",
+    "loss",
+    "rows",
+    "columns",
+    "指标",
+    "结果",
+    "结论",
+    "警告",
+    "限制",
+    "失败",
+    "未完成",
+    "不可用",
+    "unavailable",
+)
+_PROCESS_MARKERS = (
+    "原始任务",
+    "原始题面",
+    "原始问题",
+    "题面原文",
+    "题目原文",
+    "用户输入",
+    "系统提示",
+    "过程说明",
+    "过程指令",
+    "original task",
+    "original prompt",
+    "system prompt",
+    "user prompt",
+    "执行约束",
+    "不要使用",
+    "禁止使用",
+    "必须使用",
+    "不要调用",
+    "请调用",
+    "please call",
+    "do not use",
+    "must use",
+)
 
 
 class Agent:
@@ -31,6 +92,10 @@ class Agent:
         self.token_threshold_ratio = token_threshold_ratio
         self.current_token_count = 0  # 当前历史的估算 token 数
         self.cancel_event = cancel_event  # 取消信号
+        self.history_scope = "default"
+        self.compression_count = 0
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
 
     def _estimate_tokens(self, text: str) -> int:
         """估算文本的 token 数量。"""
@@ -38,9 +103,34 @@ class Agent:
 
     def _estimate_message_tokens(self, msg: dict) -> int:
         """估算单条消息的 token 数（含结构开销）。"""
-        content = msg.get("content") or ""
+        content = self._message_text(msg)
         # 4 token 额外开销（role、分隔符等）
         return self._estimate_tokens(content) + 4
+
+    @staticmethod
+    def _message_text(msg: dict) -> str:
+        """把消息正文和工具调用参数纳入预算估算。"""
+        parts = [
+            str(msg.get("content") or ""),
+            str(msg.get("reasoning_content") or ""),
+            str(msg.get("tool_call_id") or ""),
+            str(msg.get("name") or ""),
+        ]
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            parts.append(str(tool_calls))
+        return "\n".join(part for part in parts if part)
+
+    def _history_chars(self) -> int:
+        """统计当前历史中可见文本字符数，供上下文预算 trace 使用。"""
+        total = 0
+        for message in self.chat_history:
+            total += len(self._message_text(message))
+        return total
+
+    def _history_char_budget(self) -> int:
+        """把上下文窗口换算成与 trace 一致的字符预算。"""
+        return int(self.context_window * self.token_threshold_ratio * _CHARS_PER_TOKEN)
 
     async def _chat(self, **kwargs) -> Any:
         """调用 LLM 模型，支持取消中断。
@@ -67,64 +157,6 @@ class Agent:
             raise asyncio.CancelledError("任务被用户停止")
         return await chat_task
 
-    async def run(self, prompt: str, system_prompt: str, sub_title: str) -> Any:
-        """执行 Agent 对话并返回模型响应。
-
-        Args:
-            prompt: 用户输入的提示。
-            system_prompt: 系统提示词。
-            sub_title: 子任务标题。
-
-        Returns:
-            模型的响应文本。
-        """
-        try:
-            logger.info(f"{self.__class__.__name__}:开始:执行对话")
-
-            # 更新对话历史
-            await self.append_chat_history({"role": "system", "content": system_prompt})
-            await self.append_chat_history({"role": "user", "content": prompt})
-
-            # 获取历史消息用于本次对话（支持取消中断）
-            response = await self._chat(
-                history=self.chat_history,
-                agent_name=self.__class__.__name__,
-                sub_title=sub_title,
-            )
-
-            response_content = response.content
-            assistant_msg: dict = {"role": "assistant", "content": response_content}
-            if response.reasoning_content:
-                assistant_msg["reasoning_content"] = response.reasoning_content
-            if response.tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": tc.arguments},
-                    }
-                    for tc in response.tool_calls
-                ]
-            self.chat_history.append(assistant_msg)
-
-            # 使用 API 返回的实际 prompt_tokens 更新计数
-            if response.usage.prompt_tokens > 0:
-                self.current_token_count = response.usage.prompt_tokens
-            else:
-                self.current_token_count += self._estimate_message_tokens(
-                    {"content": response_content}
-                )
-
-            logger.info(f"{self.__class__.__name__}:完成:执行对话")
-            return response_content
-        except asyncio.CancelledError:
-            logger.info(f"{self.__class__.__name__}:任务被用户停止")
-            raise
-        except Exception as e:
-            error_msg = f"执行过程中遇到错误: {str(e)}"
-            logger.error(f"Agent执行失败: {str(e)}")
-            return error_msg
-
     async def append_chat_history(self, msg: dict) -> None:
         """向对话历史追加消息，并在必要时触发记忆压缩。
 
@@ -136,6 +168,82 @@ class Agent:
 
         # 只有在添加非tool消息时才进行内存清理，避免在工具调用期间破坏消息结构
         if msg.get("role") != "tool":
+            await self.compress_if_needed()
+
+    def reset_history(self, scope: str) -> None:
+        """重置当前上下文边界，但不触碰 Agent 依赖的外部资源。
+
+        Args:
+            scope: 新历史的逻辑范围，例如 ``ques1`` 或 ``section:abstract``。
+        """
+        self.chat_history = []
+        self.current_token_count = 0
+        self.history_scope = scope
+        self.compression_count = 0
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+
+    async def record_response(
+        self,
+        response: Any,
+        *,
+        allow_compress: bool = True,
+    ) -> None:
+        """追加 LLM 响应并统一更新 history/token 事实。
+
+        自定义 ReAct 循环不能复用 ``run``，因此必须通过此方法记录响应。
+        工具调用阶段可关闭压缩，避免在 assistant/tool 成对消息之间切断历史。
+
+        Args:
+            response: 标准 LLM 响应对象。
+            allow_compress: 是否在追加响应后检查历史压缩。
+        """
+        content = response.content or ""
+        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if response.reasoning_content:
+            assistant_msg["reasoning_content"] = response.reasoning_content
+        if response.tool_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                    },
+                }
+                for tool_call in response.tool_calls
+            ]
+
+        self.chat_history.append(assistant_msg)
+        self.current_token_count += self._estimate_message_tokens(assistant_msg)
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        self.last_prompt_tokens = prompt_tokens
+        self.last_completion_tokens = completion_tokens
+        if prompt_tokens > 0:
+            # prompt_tokens 是本次请求发出前的真实 history 成本；响应消息
+            # 尚未包含在下一次请求中，因此在此基础上补一条响应估算。
+            self.current_token_count = prompt_tokens + self._estimate_message_tokens(
+                assistant_msg
+            )
+
+        await trace_recorder.emit(
+            self.task_id,
+            "history.update",
+            agent=self.__class__.__name__,
+            phase=self.history_scope,
+            history_messages=len(self.chat_history),
+            history_chars=self._history_chars(),
+            history_budget_chars=self._history_char_budget(),
+            history_token_count=self.current_token_count,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            compression_count=self.compression_count,
+        )
+        if allow_compress:
             await self.compress_if_needed()
 
     async def compress_if_needed(self) -> None:
@@ -165,7 +273,8 @@ class Agent:
             end_idx = preserve_start_idx
 
             if end_idx > start_idx:
-                # 构造总结提示
+                # 只从 assistant/tool 结果中提取事实，避免把原始题面、
+                # 重试闲聊和执行禁令再次带入下一个上下文边界。
                 summarize_history = []
                 if system_msg:
                     summarize_history.append(system_msg)
@@ -173,12 +282,19 @@ class Agent:
                 summarize_history.append(
                     {
                         "role": "user",
-                        "content": f"请简洁总结以下对话的关键内容和重要结论，保留重要的上下文信息：\n\n{self._format_history_for_summary(self.chat_history[start_idx:end_idx])}",
+                        "content": (
+                            "请仅整理以下已经产生的可引用事实：路径、列名、"
+                            "指标、结论、警告、限制和未完成项。不要复述任务、"
+                            "执行约束、代码或对话过程；没有事实时写 unavailable。\n\n"
+                            f"{self._format_history_for_summary(self.chat_history[start_idx:end_idx])}"
+                        ),
                     }
                 )
 
                 # 调用 simple_chat 进行总结
-                summary = await simple_chat(self.model, summarize_history)
+                summary = self._sanitize_compression_summary(
+                    await simple_chat(self.model, summarize_history)
+                )
 
                 # 重构聊天历史：系统消息 + 总结 + 保留的消息
                 new_history = []
@@ -198,6 +314,20 @@ class Agent:
                 self.current_token_count = sum(
                     self._estimate_message_tokens(m) for m in self.chat_history
                 )
+                self.compression_count += 1
+                await trace_recorder.emit(
+                    self.task_id,
+                    "context.compress",
+                    agent=self.__class__.__name__,
+                    phase=self.history_scope,
+                    before_messages=end_idx,
+                    after_messages=len(self.chat_history),
+                    history_chars=self._history_chars(),
+                    history_budget_chars=self._history_char_budget(),
+                    history_token_count=self.current_token_count,
+                    compression_count=self.compression_count,
+                    summary_chars=len(summary),
+                )
                 logger.info(
                     f"{self.__class__.__name__}:记忆压缩完成，"
                     f"压缩至 {len(self.chat_history)} 条记录，"
@@ -214,6 +344,46 @@ class Agent:
             self.current_token_count = sum(
                 self._estimate_message_tokens(m) for m in self.chat_history
             )
+            self.compression_count += 1
+            await trace_recorder.emit(
+                self.task_id,
+                "context.compress",
+                agent=self.__class__.__name__,
+                phase=self.history_scope,
+                before_messages=len(self.chat_history),
+                after_messages=len(safe_history),
+                history_chars=self._history_chars(),
+                history_budget_chars=self._history_char_budget(),
+                history_token_count=self.current_token_count,
+                compression_count=self.compression_count,
+                summary_chars=0,
+                fallback=True,
+            )
+
+    def _sanitize_compression_summary(self, summary: Any) -> str:
+        """只保留模型摘要中的确定性事实，阻断过程指令回写 history。"""
+        facts: list[str] = []
+        for raw_line in str(summary or "").splitlines():
+            safe_line = redact_source_inspection_echoes(raw_line)
+            safe_line = redact_execution_constraints(safe_line)
+            for line in safe_line.splitlines():
+                candidate = line.strip()
+                if not candidate:
+                    continue
+                candidate = redact_source_inspection_echoes(candidate).strip()
+                if not candidate:
+                    continue
+                lowered = candidate.casefold()
+                if any(
+                    marker.casefold() in lowered for marker in _PROCESS_MARKERS
+                ):
+                    continue
+                if any(marker.casefold() in lowered for marker in _FACT_MARKERS):
+                    if candidate not in facts:
+                        facts.append(candidate)
+        if not facts:
+            return "unavailable"
+        return self._truncate_summary("\n".join(facts))
 
     def _find_safe_preserve_point(self) -> int:
         """找到安全的保留起始点，确保不会破坏工具调用序列。"""
@@ -291,12 +461,33 @@ class Agent:
         return safe_history
 
     def _format_history_for_summary(self, history: list[dict]) -> str:
-        """格式化历史记录用于总结。"""
-        formatted = []
+        """提取可交接事实，过滤原始任务和过程指令。"""
+        formatted: list[str] = []
         for msg in history:
-            role = msg["role"]
+            role = msg.get("role")
+            if role not in {"assistant", "tool"}:
+                continue
             content = msg.get("content") or ""
-            if len(content) > 500:
-                content = content[:500] + "..."
-            formatted.append(f"{role}: {content}")
-        return "\n".join(formatted)
+            for line in str(content).splitlines():
+                candidate = line.strip()
+                if not candidate:
+                    continue
+                candidate = redact_source_inspection_echoes(candidate).strip()
+                if not candidate:
+                    continue
+                lowered = candidate.lower()
+                if any(marker in lowered for marker in _PROCESS_MARKERS):
+                    continue
+                if any(marker in lowered for marker in _FACT_MARKERS):
+                    formatted.append(f"{role}: {candidate}")
+
+        if not formatted:
+            return "unavailable: no bounded facts were found"
+        return self._truncate_summary("\n".join(formatted))
+
+    @staticmethod
+    def _truncate_summary(text: str) -> str:
+        """限制压缩摘要长度，避免摘要本身成为新的长历史。"""
+        if len(text) <= _MAX_FACT_SUMMARY_CHARS:
+            return text
+        return text[: _MAX_FACT_SUMMARY_CHARS - 20].rstrip() + "\n...[truncated]"
