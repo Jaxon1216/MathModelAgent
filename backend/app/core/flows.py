@@ -1,8 +1,8 @@
 """工作流程定义模块，管理建模任务的求解和写作流程。"""
 
 from app.models.user_output import UserOutput
+from app.schemas.A2A import ModelerToCoder
 from app.tools.base_interpreter import BaseCodeInterpreter
-from app.core.agents.modeler_agent import ModelerToCoder
 
 
 class Flows:

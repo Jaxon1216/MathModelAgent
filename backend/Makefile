@@ -1,13 +1,13 @@
 .PHONY: lint format test typecheck check eval
 
 lint:
-	uv run ruff check app/
+	uv run ruff check app/ tests/
 
 format:
 	uv run ruff format app/
 
 test:
-	uv run pytest app/tests/ -v
+	uv run pytest app/tests/ tests/ -v
 
 typecheck:
 	npx pyright app/

@@ -29,3 +29,10 @@
 - 归档分支：`archive/workflow-enhance-wip-20260904`，commit `6670d1b`。
 - 当前分支：`rebuild/modeler-first`，从 `2e555ad` 创建。
 - 未从 archive 拷贝运行时代码；当前范围由 `roadmap.md` 的 M1 定义。
+
+## 2026-09-04 - M1 结构切片（未验收）
+
+- 新增 `domain`、`agents`、`prompts`、`runtime/llm` 和 `orchestration` 中的
+  Modeler 边界；旧 Coder 仍通过唯一兼容边界消费文本交接。
+- `make check`：18 passed，1 skipped；新目录和 `backend/tests/` 的 Pyright：0 errors。
+- 尚未运行固定模型配置下的三次真实 Modeler 或一次完整 E2E，因此 M1 仍未完成。

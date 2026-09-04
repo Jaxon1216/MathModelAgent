@@ -3,8 +3,16 @@
 import asyncio
 import time
 
-from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
-from app.schemas.request import Problem
+from app.agents.modeler import ModelerAgent
+from app.core.agents.coder_agent import CoderAgent
+from app.core.agents.coordinator_agent import CoordinatorAgent
+from app.core.agents.writer_agent import WriterAgent
+from app.domain.problem import Problem as ModelerProblem
+from app.domain.problem import QuestionSet
+from app.orchestration.workflow import ModelerWorkflow
+from app.runtime.llm.client import LegacyLLMClient
+from app.schemas.A2A import ModelerToCoder
+from app.schemas.request import Problem as ApiProblem
 from app.schemas.response import SystemMessage
 from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.log_util import logger
@@ -49,7 +57,7 @@ class MathModelWorkFlow(WorkFlow):
             )
             raise asyncio.CancelledError("任务被用户停止")
 
-    async def execute(self, problem: Problem):  # type: ignore[reportIncompatibleMethodOverride]
+    async def execute(self, problem: ApiProblem):  # type: ignore[reportIncompatibleMethodOverride]
         """执行数学建模工作流。
 
         Args:
@@ -124,10 +132,15 @@ class MathModelWorkFlow(WorkFlow):
 
         await self._check_cancelled()
 
+        modeler_problem = ModelerProblem(
+            task_id=problem.task_id,
+            question_set=QuestionSet.from_coordinator(
+                coordinator_response.questions,
+                coordinator_response.ques_count,
+            ),
+        )
         modeler_agent = ModelerAgent(
-            self.task_id, modeler_llm,
-            context_window=settings.MODELER_CONTEXT_WINDOW,
-            cancel_event=self.cancel_event,
+            LegacyLLMClient(modeler_llm),
         )
         await trace_recorder.emit(
             self.task_id,
@@ -138,7 +151,11 @@ class MathModelWorkFlow(WorkFlow):
             context_window=settings.MODELER_CONTEXT_WINDOW,
         )
 
-        modeler_response = await modeler_agent.run(coordinator_response)
+        model_plan = await ModelerWorkflow(modeler_agent).create_plan(modeler_problem)
+        # 旧 Coder 尚未迁移；在唯一兼容边界将领域计划降级为原有文本交接。
+        modeler_response = ModelerToCoder(
+            questions_solution=model_plan.to_coder_handoff()
+        )
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
