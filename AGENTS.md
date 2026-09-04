@@ -109,20 +109,19 @@ uv run python scripts/eval_task.py --task-id {new_task_id} \
 
 新任务 scorecard 写入：`backend/fixtures/baseline/2024高教杯C题/scorecards/{task_id}.json`
 
-评分维度见 `docs/enhance/evaluation.md`：Agent 质量、LLM 成本、绘图质量、论文结构、docx 导出。
+当前阶段的验收以 `docs/enhance/roadmap.md` 为准，真实任务证据只追加到
+`docs/enhance/experiment-log.md`。旧评分口径保存在
+`docs/enhance/archive/evaluation.md`，不得把它当作当前阶段的唯一门禁。
 
-### 标准迭代闭环
+### 分阶段迭代闭环
 
 改 Agent / prompt / workflow 时按此流程：
 
-1. **护栏** — `cd backend && make check`（lint + test 全绿）
-2. **跑基线** — 用 2024 高教杯 C 题跑一轮完整任务，记下 `task_id`
-3. **打分存档** — `make eval TASK_ID={task_id}`，scorecard 写入 `fixtures/baseline/.../scorecards/`
-4. **改代码** — 实施架构或 prompt 迭代
-5. **再跑护栏** — `make check`
-6. **重跑任务** — 同一赛题再跑一轮，得到新 `task_id`
-7. **对比打分** — `make eval` 或加 `--compare 20260812-163504-32b726a1`，看 `regression_check.all_pass` 与 `scorecard_compare.diffs`
-8. **正反馈才 commit** — `all_pass=true` 且无关键指标退化 → commit；否则查 trace 定位问题
+1. **定范围** — 阅读 `target-state.md`、`roadmap.md` 和 `decisions.md`；只改当前阶段允许的文件。
+2. **护栏** — 补当前阶段的聚焦测试并运行 `cd backend && make check`。
+3. **跑证据** — 仅在 roadmap 的完成定义要求时，用固定的 2024 高教杯 C 题和固定模型配置运行任务，记下 `task_id`。
+4. **存档** — 运行 `make eval TASK_ID={task_id}` 保存 scorecard，并把结论和配置追加到 `experiment-log.md`。
+5. **验收后推进** — 只有 roadmap 的完成定义满足后才 commit 并开启下一阶段；`regression_check.all_pass` 只是辅助诊断，不能替代阶段验收。
 
 **退化时查什么日志：**
 

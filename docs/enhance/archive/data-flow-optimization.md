@@ -1,5 +1,7 @@
 # 数据交互节点优化
 
+> **2026-08-25**：方案 1（开局注入结构画像）已由「建模前清洗落盘 + `data_contract.json` 限长渲染」替代，见 [`data_contract.py`](../../backend/app/utils/data_contract.py)。下文方案 1 仅作历史。
+
 ## 现状
 
 LLM 与数据的交互完全通过文本往返，信息密度低：
