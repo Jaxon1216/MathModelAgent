@@ -107,3 +107,18 @@
 | 1 | true | 121355 | 1 | true |  |
 | 2 | true | 205678 | 1 | true |  |
 | 3 | true | 152576 | 1 | true |  |
+
+## 2026-09-04T15:36:25.089018+00:00 - Modeler 真实 smoke
+
+- git revision：`649ee789b03c58cd8b77817d72fad9023957e580`
+- worktree dirty：`true`
+- M1 source dirty：`false`
+- fixture：`fixtures/modeler/2024高教杯C题.json`，SHA256 `b24864568fefb5097167994dfd670311820c483df6491a53e4f2575c884a14ea`
+- 模型：`deepseek-v4-pro`，API 类型：`openai-chat`，配置指纹：`79f80944c583d544`
+- 结果：`all_pass=true`
+
+| run | success | latency_ms | attempts | raw_output_passed | failure |
+|---:|---|---:|---:|---|---|
+| 1 | true | 144473 | 1 | true |  |
+| 2 | true | 197216 | 1 | true |  |
+| 3 | true | 211317 | 1 | true |  |
