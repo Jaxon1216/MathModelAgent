@@ -71,7 +71,7 @@ make smoke-modeler          # 真实模型并发 3 次；会追加 experiment-lo
 普通 `make test` 排除 `live_modeler`，不会意外调用真实模型。完整 E2E 只在
 `docs/enhance/roadmap.md` 的当前阶段验收时运行一次。
 Modeler 契约修复次数通过 `.env.dev` 的 `MODELER_MAX_REPAIR_ATTEMPTS` 配置，
-范围 0-3，默认 1；不要与 Provider 网络重试或 Coder 最大轮数混用。
+接受任意非负整数，默认 3；不要与 Provider 网络重试或 Coder 最大轮数混用。
 
 ### 例题 Fixture（仅 2024 高教杯 C 题）
 

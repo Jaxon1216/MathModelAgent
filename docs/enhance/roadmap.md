@@ -17,8 +17,8 @@
 ### 技术选择
 
 第一版使用文本 JSON、Pydantic 校验和有限修复；不把 provider 强制 function call
-作为全链路依赖。修复次数由 `MODELER_MAX_REPAIR_ATTEMPTS` 控制，默认 1，
-允许 0-3；它只控制格式/契约修复，不控制网络重试或 Agent 步数。
+作为全链路依赖。修复次数由 `MODELER_MAX_REPAIR_ATTEMPTS` 控制，默认 3，
+接受任意非负整数；它只控制格式/契约修复，不控制网络重试或 Agent 步数。
 
 ### 验证节奏
 

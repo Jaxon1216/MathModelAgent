@@ -35,10 +35,10 @@ class ModelerAgent:
         self,
         client: LLMClient,
         *,
-        max_repair_attempts: int = 1,
+        max_repair_attempts: int = 3,
     ) -> None:
-        if not 0 <= max_repair_attempts <= 3:
-            raise ValueError("max_repair_attempts 必须在 0 到 3 之间")
+        if max_repair_attempts < 0:
+            raise ValueError("max_repair_attempts 不能小于 0")
         self._client = client
         self._max_repair_attempts = max_repair_attempts
 

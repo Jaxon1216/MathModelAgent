@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     MODELER_BASE_URL: Optional[str] = None
     MODELER_MAX_TOKENS: Optional[int] = None
     MODELER_CONTEXT_WINDOW: int = 128000
-    MODELER_MAX_REPAIR_ATTEMPTS: int = Field(default=1, ge=0, le=3)
+    MODELER_MAX_REPAIR_ATTEMPTS: int = Field(default=3, ge=0)
 
     CODER_API_TYPE: Optional[ApiType] = None
     CODER_API_KEY: Optional[str] = None
