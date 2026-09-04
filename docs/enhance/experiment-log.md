@@ -92,3 +92,18 @@
   1 live deselected；M1 聚焦 Pyright：0 errors。
 - 上一条 clean smoke 使用默认一次修复且 3/3 首轮通过；本配置接线提交后仍需
   以新 clean revision 重跑，才能作为当前源码的最终 smoke 证据。
+
+## 2026-09-04T15:15:09.199760+00:00 - Modeler 真实 smoke
+
+- git revision：`0727178551ab1ddbfa4823cf79e0257d2855bc4b`
+- worktree dirty：`true`
+- M1 source dirty：`false`
+- fixture：`fixtures/modeler/2024高教杯C题.json`，SHA256 `b24864568fefb5097167994dfd670311820c483df6491a53e4f2575c884a14ea`
+- 模型：`deepseek-v4-pro`，API 类型：`openai-chat`，配置指纹：`185177e1ac83d746`
+- 结果：`all_pass=true`
+
+| run | success | latency_ms | attempts | raw_output_passed | failure |
+|---:|---|---:|---:|---|---|
+| 1 | true | 121355 | 1 | true |  |
+| 2 | true | 205678 | 1 | true |  |
+| 3 | true | 152576 | 1 | true |  |
