@@ -141,6 +141,7 @@ async def run_smoke(
         "timestamp": datetime.now(UTC).isoformat(),
         "git_revision": _git_revision(),
         "worktree_dirty": _git_worktree_dirty(),
+        "source_dirty": _git_source_dirty(),
         "fixture": str(fixture_path.relative_to(BACKEND_ROOT)),
         "fixture_sha256": hashlib.sha256(fixture_bytes).hexdigest(),
         "config": snapshot,
@@ -239,6 +240,7 @@ def append_experiment_log(report: dict[str, Any], path: Path) -> None:
         "",
         f"- git revision：`{report['git_revision']}`",
         f"- worktree dirty：`{str(report['worktree_dirty']).lower()}`",
+        f"- M1 source dirty：`{str(report['source_dirty']).lower()}`",
         f"- fixture：`{report['fixture']}`，SHA256 `{report['fixture_sha256']}`",
         (
             f"- 模型：`{report['config'].get('model')}`，API 类型："
@@ -282,6 +284,31 @@ def _git_worktree_dirty() -> bool | None:
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return bool(result.stdout.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _git_source_dirty() -> bool | None:
+    """仅检查会影响 M1 smoke 行为的代码、配置和 fixture。"""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--",
+                "backend/app",
+                "backend/scripts/smoke_modeler.py",
+                "backend/fixtures/modeler",
+                "backend/Makefile",
+                "backend/pyproject.toml",
+            ],
             cwd=REPOSITORY_ROOT,
             check=True,
             capture_output=True,

@@ -65,6 +65,7 @@ def test_config_fingerprint_is_stable_and_log_omits_raw_output(tmp_path: Path):
         "timestamp": "2026-09-04T00:00:00+00:00",
         "git_revision": "abc123",
         "worktree_dirty": False,
+        "source_dirty": False,
         "fixture": "fixtures/modeler/2024高教杯C题.json",
         "fixture_sha256": "fixture-hash",
         "config": snapshot,
@@ -88,6 +89,7 @@ def test_config_fingerprint_is_stable_and_log_omits_raw_output(tmp_path: Path):
 
     assert "配置指纹" in text
     assert "worktree dirty：`false`" in text
+    assert "M1 source dirty：`false`" in text
     assert "invalid_response" in text
     assert "\\|" in text
     assert "raw model response" not in text
