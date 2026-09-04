@@ -176,7 +176,12 @@ jq 'select(.event=="llm.response")' backend/logs/traces/{task_id}.jsonl
 - 不改 `.env` 里的实际密钥
 - 根目录 `skills/` 与后端主链路无关，除非用户明确要求
 
-## 文档
+## 文档索引
 
-- [`CLAUDE.md`](CLAUDE.md) — 命令、结构、代码风格
-- [`docs/enhance/`](docs/enhance/) — 质量提升计划与现状
+| 路径 | 职责 |
+|------|------|
+| [`docs/enhance/target-state.md`](docs/enhance/target-state.md) | 长期目标、目标工作流和稳定不变量 |
+| [`docs/enhance/changelog.md`](docs/enhance/changelog.md) | 已落地能力的阶段摘要 |
+| [`docs/enhance/sibling-references.md`](docs/enhance/sibling-references.md) | 同级项目参考 |
+| [`docs/enhance/experiment-log.md`](docs/enhance/experiment-log.md) | smoke / E2E 配置、任务 ID 和运行证据 |
+| [`docs/enhance/roadmap.md`](docs/enhance/roadmap.md) | 当前阶段、下一阶段及完成定义 |
