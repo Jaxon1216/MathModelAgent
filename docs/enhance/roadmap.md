@@ -18,6 +18,13 @@
 
 第一版使用文本 JSON、Pydantic 校验和一次修复；不把 provider 强制 function call 作为全链路依赖。
 
+### 验证节奏
+
+1. 每次修改 Modeler 后运行 `cd backend && make test-modeler`。
+2. 需要验证真实模型行为时运行 `make smoke-modeler`；该命令用固定 fixture
+   并发执行 3 次独立 Modeler，不运行 Coordinator、Coder、Writer、解释器或 Pandoc。
+3. 仅当三次 smoke 全部通过后运行一次完整 E2E，作为 M1 阶段验收。
+
 ## 下一阶段：M2 Coder ReAct
 
 仅在 M1 达到完成定义后开启。本阶段的范围和验收届时再写；M1 内不做任何 Coder 实现。

@@ -9,20 +9,23 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.domain.problem import DataCatalog, Problem
 
+MAX_CODER_HANDOFF_CHARS = 8_000
+MAX_PLAN_LIST_ITEM_CHARS = 300
+
 
 class DataReference(BaseModel):
     """计划中对已验证数据表和列的引用。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    file: str = Field(min_length=1)
-    columns: tuple[str, ...] = ()
+    table_id: str = Field(min_length=1)
+    columns: tuple[str, ...] = Field(min_length=1)
 
-    @field_validator("file")
+    @field_validator("table_id")
     @classmethod
-    def normalize_file(cls, filename: str) -> str:
-        """规范化文件名。"""
-        return filename.strip()
+    def normalize_table_id(cls, table_id: str) -> str:
+        """规范化稳定表标识。"""
+        return table_id.strip()
 
     @field_validator("columns")
     @classmethod
@@ -45,9 +48,9 @@ class PlanSection(BaseModel):
     objective: str = Field(min_length=1, max_length=1200)
     model: str = Field(min_length=1, max_length=1200)
     method: str = Field(min_length=1, max_length=1200)
-    constraints: tuple[str, ...] = ()
-    validation: tuple[str, ...] = Field(min_length=1)
-    figures: tuple[str, ...] = Field(min_length=1)
+    constraints: tuple[str, ...] = Field(default=(), max_length=12)
+    validation: tuple[str, ...] = Field(min_length=1, max_length=8)
+    figures: tuple[str, ...] = Field(min_length=1, max_length=8)
     fallback: str = Field(min_length=1, max_length=1200)
 
     @field_validator("objective", "model", "method", "fallback")
@@ -66,6 +69,8 @@ class PlanSection(BaseModel):
         normalized = tuple(value.strip() for value in values)
         if any(not value for value in normalized):
             raise ValueError("计划列表不能包含空白项")
+        if any(len(value) > MAX_PLAN_LIST_ITEM_CHARS for value in normalized):
+            raise ValueError(f"计划列表单项不能超过 {MAX_PLAN_LIST_ITEM_CHARS} 个字符")
         return normalized
 
 
@@ -78,19 +83,37 @@ class ModelPlan(BaseModel):
     question_plans: dict[str, PlanSection]
     sensitivity_analysis: PlanSection
 
-    def to_coder_handoff(self) -> dict[str, str]:
+    def to_coder_handoff(self, data_catalog: DataCatalog) -> dict[str, str]:
         """将结构化计划降级为旧 Coder 可消费的文本交接。
+
+        Args:
+            data_catalog: 用于将规范引用还原为真实文件、sheet 和原始表头。
 
         Returns:
             旧 `Flows` 所需的 `quesN` 和 `sensitivity_analysis` 键值对。
         """
-        return {
+        handoff = {
             **{
-                question_key: _render_section(section)
+                question_key: _render_section(section, data_catalog)
                 for question_key, section in self.question_plans.items()
             },
-            "sensitivity_analysis": _render_section(self.sensitivity_analysis),
+            "sensitivity_analysis": _render_section(
+                self.sensitivity_analysis, data_catalog
+            ),
         }
+        oversized = {
+            key: len(value)
+            for key, value in handoff.items()
+            if len(value) > MAX_CODER_HANDOFF_CHARS
+        }
+        if oversized:
+            raise ModelPlanValidationError(
+                (
+                    "coder_handoff_too_long: "
+                    + ", ".join(f"{key}={length}" for key, length in oversized.items()),
+                )
+            )
+        return handoff
 
 
 class ModelPlanValidationError(ValueError):
@@ -138,8 +161,7 @@ class PlanValidation(BaseModel):
             plan = ModelPlan.model_validate(payload)
         except ValidationError as exc:
             errors = tuple(
-                f"schema.{'.'.join(str(part) for part in error['loc'])}: "
-                f"{error['msg']}"
+                f"schema.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
                 for error in exc.errors()
             )
             raise ModelPlanValidationError(errors) from exc
@@ -155,6 +177,8 @@ class PlanValidation(BaseModel):
             )
 
         self._validate_data_references(plan)
+        # 兼容交接也是 M1 输出契约的一部分，必须在 phase 成功前验证。
+        plan.to_coder_handoff(self.data_catalog)
         return plan
 
     def _validate_data_references(self, plan: ModelPlan) -> None:
@@ -166,18 +190,18 @@ class PlanValidation(BaseModel):
 
     def _validate_reference(self, reference: DataReference) -> None:
         """校验单条数据引用。"""
-        allowed_files = set(self.data_catalog.files)
-        if reference.file not in allowed_files:
+        table = self.data_catalog.get_table(reference.table_id)
+        if table is None:
             raise ModelPlanValidationError(
-                (f"unknown_data_file: {reference.file}",)
+                (f"unknown_data_table: {reference.table_id}",)
             )
 
-        allowed_columns = set(self.data_catalog.columns_by_file.get(reference.file, ()))
+        allowed_columns = {column.name for column in table.columns}
         unknown_columns = set(reference.columns) - allowed_columns
         if unknown_columns:
             raise ModelPlanValidationError(
                 (
-                    f"unknown_data_columns: file={reference.file}, "
+                    f"unknown_data_columns: table={reference.table_id}, "
                     f"columns={sorted(unknown_columns)}",
                 )
             )
@@ -193,12 +217,11 @@ def _strip_code_fence(raw_json: str) -> str:
     return stripped
 
 
-def _render_section(section: PlanSection) -> str:
+def _render_section(section: PlanSection, data_catalog: DataCatalog) -> str:
     """将一个领域计划段渲染为旧 Coder 的紧凑文本。"""
     if section.data:
         data_text = "；".join(
-            f"{reference.file}({', '.join(reference.columns) or '全部已验证列'})"
-            for reference in section.data
+            _render_reference(reference, data_catalog) for reference in section.data
         )
     else:
         data_text = "未引用已验证数据表；先按题目事实和实际数据确认输入。"
@@ -215,4 +238,29 @@ def _render_section(section: PlanSection) -> str:
             f"图表：{'；'.join(section.figures)}",
             f"回退：{section.fallback}",
         ]
+    )
+
+
+def _render_reference(
+    reference: DataReference,
+    data_catalog: DataCatalog,
+) -> str:
+    """把规范引用渲染为旧 Coder 可准确读取的文件与原始表头。"""
+    table = data_catalog.get_table(reference.table_id)
+    if table is None:
+        raise ValueError(f"未知 table_id: {reference.table_id}")
+
+    column_by_name = {column.name: column for column in table.columns}
+    rendered_columns = []
+    for name in reference.columns:
+        column = column_by_name[name]
+        if column.name == column.source_name:
+            rendered_columns.append(column.name)
+        else:
+            rendered_columns.append(f"{column.name}（原始表头={column.source_name!r}）")
+
+    sheet_text = f"，sheet={table.sheet!r}" if table.sheet is not None else ""
+    return (
+        f"{table.table_id}（文件={table.file!r}{sheet_text}，"
+        f"列={', '.join(rendered_columns)}）"
     )

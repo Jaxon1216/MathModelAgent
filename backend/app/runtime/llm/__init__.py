@@ -1,5 +1,5 @@
 """LLM 运行时边界。"""
 
-from .client import LLMClient, LegacyLLMClient
+from .client import LLMClient, LLMClientError, LegacyLLMClient
 
-__all__ = ["LLMClient", "LegacyLLMClient"]
+__all__ = ["LLMClient", "LLMClientError", "LegacyLLMClient"]

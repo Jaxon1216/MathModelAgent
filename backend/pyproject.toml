@@ -127,3 +127,8 @@ docstring-code-format = false
 # enabled.
 docstring-code-line-length = "dynamic"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "live_modeler: calls the configured external Modeler API; excluded from normal tests",
+]

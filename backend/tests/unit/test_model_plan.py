@@ -5,7 +5,31 @@ import json
 import pytest
 
 from app.domain.model_plan import ModelPlanValidationError, PlanValidation
-from app.domain.problem import DataCatalog, Problem, QuestionSet
+from app.domain.problem import (
+    DataCatalog,
+    DataColumn,
+    DataTable,
+    Problem,
+    QuestionSet,
+)
+
+
+def _table(
+    table_id: str,
+    filename: str,
+    columns: tuple[str, ...],
+    *,
+    sheet: str | None = None,
+) -> DataTable:
+    """构造保留原始表头的领域表。"""
+    return DataTable(
+        table_id=table_id,
+        file=filename,
+        sheet=sheet,
+        columns=tuple(
+            DataColumn(name=column.strip(), source_name=column) for column in columns
+        ),
+    )
 
 
 def _problem() -> Problem:
@@ -21,11 +45,16 @@ def _problem() -> Problem:
             background="农作物种植策略",
         ),
         data_catalog=DataCatalog(
-            files=("crop.csv", "land.csv"),
-            columns_by_file={
-                "crop.csv": ("crop", "yield"),
-                "land.csv": ("land_type", "area"),
-            },
+            input_tables=(
+                _table("crop.csv", "crop.csv", ("crop", "yield")),
+                _table(
+                    "land.xlsx::现有耕地",
+                    "land.xlsx",
+                    ("land_type", "area", "note "),
+                    sheet="现有耕地",
+                ),
+            ),
+            output_templates=("result.xlsx",),
         ),
     )
 
@@ -50,10 +79,15 @@ def _payload() -> dict:
         "version": "m1",
         "question_plans": {
             "ques1": _section(
-                data=[{"file": "crop.csv", "columns": ["crop", "yield"]}]
+                data=[{"table_id": "crop.csv", "columns": ["crop", "yield"]}]
             ),
             "ques2": _section(
-                data=[{"file": "land.csv", "columns": ["land_type", "area"]}]
+                data=[
+                    {
+                        "table_id": "land.xlsx::现有耕地",
+                        "columns": ["land_type", "area", "note"],
+                    }
+                ]
             ),
         },
         "sensitivity_analysis": _section(),
@@ -67,9 +101,12 @@ def test_plan_validation_requires_exact_questions_and_verified_references():
     )
 
     assert set(plan.question_plans) == {"ques1", "ques2"}
-    assert plan.question_plans["ques1"].data[0].file == "crop.csv"
-    assert "ques2" in plan.to_coder_handoff()
-    assert "sensitivity_analysis" in plan.to_coder_handoff()
+    assert plan.question_plans["ques1"].data[0].table_id == "crop.csv"
+    handoff = plan.to_coder_handoff(_problem().data_catalog)
+    assert "ques2" in handoff
+    assert "sensitivity_analysis" in handoff
+    assert "原始表头='note '" in handoff["ques2"]
+    assert "sheet='现有耕地'" in handoff["ques2"]
 
 
 def test_plan_validation_rejects_missing_question_plan():
@@ -83,11 +120,37 @@ def test_plan_validation_rejects_missing_question_plan():
         )
 
 
+def test_plan_validation_rejects_oversized_list_item():
+    """进入旧 Coder 前应阻止无界列表文本膨胀。"""
+    payload = _payload()
+    payload["question_plans"]["ques1"]["figures"] = ["x" * 301]
+
+    with pytest.raises(ModelPlanValidationError, match="不能超过 300"):
+        PlanValidation.for_problem(_problem()).parse_json(
+            json.dumps(payload, ensure_ascii=False)
+        )
+
+
+def test_coder_handoff_rejects_oversized_rendered_text():
+    """各字段单独合法但聚合文本过长时，桥接仍必须失败。"""
+    payload = _payload()
+    oversized_section = payload["question_plans"]["ques1"]
+    for key in ("objective", "model", "method", "fallback"):
+        oversized_section[key] = "x" * 1200
+    oversized_section["constraints"] = ["x" * 300] * 12
+    oversized_section["validation"] = ["x" * 300] * 8
+    oversized_section["figures"] = ["x" * 300] * 8
+    with pytest.raises(ModelPlanValidationError, match="coder_handoff_too_long"):
+        PlanValidation.for_problem(_problem()).parse_json(
+            json.dumps(payload, ensure_ascii=False)
+        )
+
+
 def test_plan_validation_rejects_data_references_without_a_catalog():
     """未提供验证数据目录时，计划不能猜测文件或列。"""
     problem = _problem().model_copy(update={"data_catalog": DataCatalog()})
 
-    with pytest.raises(ModelPlanValidationError, match="unknown_data_file"):
+    with pytest.raises(ModelPlanValidationError, match="unknown_data_table"):
         PlanValidation.for_problem(problem).parse_json(
             json.dumps(_payload(), ensure_ascii=False)
         )
@@ -96,8 +159,14 @@ def test_plan_validation_rejects_data_references_without_a_catalog():
 @pytest.mark.parametrize(
     ("reference", "reason"),
     [
-        ({"file": "invented.csv", "columns": ["yield"]}, "unknown_data_file"),
-        ({"file": "crop.csv", "columns": ["invented_column"]}, "unknown_data_columns"),
+        (
+            {"table_id": "invented.csv", "columns": ["yield"]},
+            "unknown_data_table",
+        ),
+        (
+            {"table_id": "crop.csv", "columns": ["invented_column"]},
+            "unknown_data_columns",
+        ),
     ],
 )
 def test_plan_validation_rejects_invented_data_facts(

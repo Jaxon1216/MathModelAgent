@@ -17,7 +17,7 @@ def get_modeler_system_prompt() -> str:
   "version": "m1",
   "question_plans": {
     "ques1": {
-      "data": [{"file": "已验证文件名", "columns": ["已验证列名"]}],
+      "data": [{"table_id": "已验证 table_id", "columns": ["已验证规范列名"]}],
       "objective": "目标",
       "model": "模型与理由",
       "method": "求解步骤",
@@ -39,9 +39,11 @@ def get_modeler_system_prompt() -> str:
   }
 }
 
-`question_plans` 必须且只能包含输入中声明的所有 quesN。只可引用输入
-`data_catalog` 中的文件和列；未提供已验证数据目录时，`data` 必须为空，
-不能猜测文件名或列名。每个计划都必须包含验证和至少一张结果或诊断图。
+`question_plans` 必须且只能包含输入中声明的所有 quesN。`data` 只可引用
+`data_catalog.input_tables` 中的 table_id 和规范列名；`output_templates`
+只能作为结果文件，不能作为输入数据。未提供输入表时，`data` 必须为空。
+不能猜测 table_id、文件名、sheet 或列名。每个计划都必须包含验证和至少
+一张结果或诊断图。
 """.strip()
 
 

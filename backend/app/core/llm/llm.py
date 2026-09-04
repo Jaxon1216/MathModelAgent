@@ -96,6 +96,7 @@ class LLM:
         top_p: float | None = None,
         agent_name: str = "SystemAgent",
         sub_title: str | None = None,
+        publish_response: bool = True,
     ) -> StandardResponse:
         self._validate_config(agent_name)
 
@@ -120,9 +121,14 @@ class LLM:
                     top_p=top_p,
                 )
                 latency_ms = round((time.monotonic() - start_ts) * 1000)
-                logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
+                logger.info(
+                    "API返回: "
+                    f"content_length={len(response.content or '')}, "
+                    f"tool_calls={len(response.tool_calls)}"
+                )
                 self.chat_count += 1
-                await self.send_message(response, agent_name, sub_title)
+                if publish_response:
+                    await self.send_message(response, agent_name, sub_title)
                 await trace_recorder.emit(
                     self.task_id,
                     "llm.response",

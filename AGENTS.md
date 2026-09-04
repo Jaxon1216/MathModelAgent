@@ -60,6 +60,17 @@ jq 'select(.event=="subtask.summary")' backend/logs/traces/{task_id}.jsonl
 cd backend && make check    # lint + test 一键
 ```
 
+### M1 Modeler 分层验证
+
+```bash
+cd backend
+make test-modeler           # 纯本地 Modeler 契约、扫描、桥接测试
+make smoke-modeler          # 真实模型并发 3 次；会追加 experiment-log.md
+```
+
+普通 `make test` 排除 `live_modeler`，不会意外调用真实模型。完整 E2E 只在
+`docs/enhance/roadmap.md` 的当前阶段验收时运行一次。
+
 ### 例题 Fixture（仅 2024 高教杯 C 题）
 
 评测与构造 `Problem` 只用这一道题，不要再加第二套 fixture。

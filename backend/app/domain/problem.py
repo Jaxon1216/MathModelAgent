@@ -8,56 +8,122 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class DataCatalog(BaseModel):
-    """可由 Modeler 引用的已验证数据事实。
+class DataColumn(BaseModel):
+    """数据表中的规范列名及其原始表头。"""
 
-    该对象由编排层或后续数据准备阶段提供；领域层不读取文件系统。
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1)
+    source_name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, name: str) -> str:
+        """规范列名不允许首尾空白。"""
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("规范列名不能为空")
+        return normalized
+
+    @field_validator("source_name")
+    @classmethod
+    def validate_source_name(cls, source_name: str) -> str:
+        """保留原始表头，包括有意义的首尾空白。"""
+        if not source_name.strip():
+            raise ValueError("原始列名不能为空")
+        return source_name
+
+    @model_validator(mode="after")
+    def validate_normalized_name(self) -> DataColumn:
+        """规范名必须是原始表头去除首尾空白后的结果。"""
+        if self.name != self.source_name.strip():
+            raise ValueError("规范列名必须等于原始表头的 strip 结果")
+        return self
+
+
+class DataTable(BaseModel):
+    """一个可被 Modeler 引用的 CSV 或 Excel sheet。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    table_id: str = Field(min_length=1)
+    file: str = Field(min_length=1)
+    sheet: str | None = None
+    columns: tuple[DataColumn, ...] = Field(min_length=1)
+
+    @field_validator("table_id", "file")
+    @classmethod
+    def normalize_identifier(cls, value: str) -> str:
+        """表标识和文件名不允许首尾空白。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("表标识和文件名不能为空")
+        return normalized
+
+    @field_validator("sheet")
+    @classmethod
+    def validate_sheet(cls, sheet: str | None) -> str | None:
+        """保留 Excel 原始 sheet 名；CSV 使用 None。"""
+        if sheet is not None and not sheet.strip():
+            raise ValueError("sheet 名不能为空")
+        return sheet
+
+    @model_validator(mode="after")
+    def validate_columns(self) -> DataTable:
+        """表标识可重建，且同一表的规范列名必须唯一。"""
+        expected_table_id = (
+            self.file if self.sheet is None else f"{self.file}::{self.sheet.strip()}"
+        )
+        if self.table_id != expected_table_id:
+            raise ValueError(f"table_id 必须等于文件与 sheet 组合: {expected_table_id}")
+        names = [column.name for column in self.columns]
+        if len(set(names)) != len(names):
+            raise ValueError(f"{self.table_id} 的规范列名不能重复")
+        return self
+
+
+class DataCatalog(BaseModel):
+    """可由 Modeler 引用的输入表与只可写入的结果模板。
+
+    该对象由数据准备层提供；领域层不读取文件系统。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    files: tuple[str, ...] = ()
-    columns_by_file: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    input_tables: tuple[DataTable, ...] = ()
+    output_templates: tuple[str, ...] = ()
 
-    @field_validator("files")
+    @field_validator("output_templates")
     @classmethod
-    def validate_files(cls, files: tuple[str, ...]) -> tuple[str, ...]:
-        """规范化并校验文件名集合。"""
-        normalized = tuple(name.strip() for name in files)
-        if any(not name for name in normalized):
-            raise ValueError("数据文件名不能为空")
+    def validate_output_templates(cls, templates: tuple[str, ...]) -> tuple[str, ...]:
+        """规范化并校验结果模板文件名。"""
+        normalized = tuple(template.strip() for template in templates)
+        if any(not template for template in normalized):
+            raise ValueError("结果模板文件名不能为空")
         if len(set(normalized)) != len(normalized):
-            raise ValueError("数据文件名不能重复")
-        return normalized
-
-    @field_validator("columns_by_file")
-    @classmethod
-    def validate_columns(
-        cls, columns_by_file: dict[str, tuple[str, ...]]
-    ) -> dict[str, tuple[str, ...]]:
-        """规范化并校验列名集合。"""
-        normalized: dict[str, tuple[str, ...]] = {}
-        for filename, columns in columns_by_file.items():
-            clean_filename = filename.strip()
-            clean_columns = tuple(column.strip() for column in columns)
-            if not clean_filename:
-                raise ValueError("数据文件名不能为空")
-            if any(not column for column in clean_columns):
-                raise ValueError(f"{clean_filename} 包含空列名")
-            if len(set(clean_columns)) != len(clean_columns):
-                raise ValueError(f"{clean_filename} 的列名不能重复")
-            normalized[clean_filename] = clean_columns
+            raise ValueError("结果模板文件名不能重复")
         return normalized
 
     @model_validator(mode="after")
-    def validate_column_files(self) -> DataCatalog:
-        """确保列信息只属于已声明文件。"""
-        unknown_files = set(self.columns_by_file) - set(self.files)
-        if unknown_files:
+    def validate_tables(self) -> DataCatalog:
+        """表标识唯一，且输入文件不能同时被标为结果模板。"""
+        table_ids = [table.table_id for table in self.input_tables]
+        if len(set(table_ids)) != len(table_ids):
+            raise ValueError("table_id 不能重复")
+        input_files = {table.file for table in self.input_tables}
+        overlap = input_files & set(self.output_templates)
+        if overlap:
             raise ValueError(
-                f"列信息引用了未声明文件: {', '.join(sorted(unknown_files))}"
+                f"文件不能同时作为输入和结果模板: {', '.join(sorted(overlap))}"
             )
         return self
+
+    def get_table(self, table_id: str) -> DataTable | None:
+        """按稳定标识查找输入表。"""
+        return next(
+            (table for table in self.input_tables if table.table_id == table_id),
+            None,
+        )
 
 
 class QuestionSet(BaseModel):

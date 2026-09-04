@@ -7,10 +7,10 @@ from app.agents.modeler import ModelerAgent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.coordinator_agent import CoordinatorAgent
 from app.core.agents.writer_agent import WriterAgent
-from app.domain.problem import Problem as ModelerProblem
 from app.domain.problem import QuestionSet
 from app.orchestration.workflow import ModelerWorkflow
 from app.runtime.llm.client import LegacyLLMClient
+from app.runtime.tracing import LegacyStageTracer
 from app.schemas.A2A import ModelerToCoder
 from app.schemas.request import Problem as ApiProblem
 from app.schemas.response import SystemMessage
@@ -132,15 +132,8 @@ class MathModelWorkFlow(WorkFlow):
 
         await self._check_cancelled()
 
-        modeler_problem = ModelerProblem(
-            task_id=problem.task_id,
-            question_set=QuestionSet.from_coordinator(
-                coordinator_response.questions,
-                coordinator_response.ques_count,
-            ),
-        )
         modeler_agent = ModelerAgent(
-            LegacyLLMClient(modeler_llm),
+            LegacyLLMClient(modeler_llm, cancel_event=self.cancel_event),
         )
         await trace_recorder.emit(
             self.task_id,
@@ -151,10 +144,22 @@ class MathModelWorkFlow(WorkFlow):
             context_window=settings.MODELER_CONTEXT_WINDOW,
         )
 
-        model_plan = await ModelerWorkflow(modeler_agent).create_plan(modeler_problem)
+        modeler_result = await ModelerWorkflow(
+            modeler_agent,
+            tracer=LegacyStageTracer(),
+        ).create_plan_from_work_dir(
+            task_id=problem.task_id,
+            question_set=QuestionSet.from_coordinator(
+                coordinator_response.questions,
+                coordinator_response.ques_count,
+            ),
+            work_dir=self.work_dir,
+        )
         # 旧 Coder 尚未迁移；在唯一兼容边界将领域计划降级为原有文本交接。
         modeler_response = ModelerToCoder(
-            questions_solution=model_plan.to_coder_handoff()
+            questions_solution=modeler_result.plan.to_coder_handoff(
+                modeler_result.problem.data_catalog
+            )
         )
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
