@@ -69,3 +69,17 @@
   验证阶段；后续应在 clean commit 上重跑。
 - 当前 `make test-modeler`：26 passed，2.92 秒；`make check`：36 passed、
   1 skipped、1 live deselected；M1 聚焦 Pyright：0 errors。
+
+## 2026-09-04T14:48:20.871969+00:00 - Modeler 真实 smoke
+
+- git revision：`c6193d04904c660c5ed0367ea7e9a5c1fdf9dbbf`
+- worktree dirty：`false`
+- fixture：`fixtures/modeler/2024高教杯C题.json`，SHA256 `b24864568fefb5097167994dfd670311820c483df6491a53e4f2575c884a14ea`
+- 模型：`deepseek-v4-pro`，API 类型：`openai-chat`，配置指纹：`2022b51e2dd2505a`
+- 结果：`all_pass=true`
+
+| run | success | latency_ms | attempts | raw_output_passed | failure |
+|---:|---|---:|---:|---|---|
+| 1 | true | 242554 | 1 | true |  |
+| 2 | true | 145927 | 1 | true |  |
+| 3 | true | 146403 | 1 | true |  |
