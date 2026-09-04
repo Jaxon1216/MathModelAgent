@@ -83,3 +83,12 @@
 | 1 | true | 242554 | 1 | true |  |
 | 2 | true | 145927 | 1 | true |  |
 | 3 | true | 146403 | 1 | true |  |
+
+## 2026-09-04 - Modeler 修复次数配置化（待固定版本 smoke）
+
+- 新增 `MODELER_MAX_REPAIR_ATTEMPTS`，默认 1、范围 0-3；仅控制 JSON/契约
+  修复，不改变 Provider 网络重试或 Coder 轮数。
+- `make test-modeler`：29 passed；`make check`：39 passed、1 skipped、
+  1 live deselected；M1 聚焦 Pyright：0 errors。
+- 上一条 clean smoke 使用默认一次修复且 3/3 首轮通过；本配置接线提交后仍需
+  以新 clean revision 重跑，才能作为当前源码的最终 smoke 证据。

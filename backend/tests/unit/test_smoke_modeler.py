@@ -2,12 +2,37 @@
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
+from app.config.setting import Settings
 from scripts.smoke_modeler import (
     DEFAULT_FIXTURE,
     append_experiment_log,
     config_fingerprint,
     load_fixture,
 )
+
+
+def test_modeler_repair_attempts_setting_is_user_configurable(monkeypatch):
+    """环境配置允许 0-3 次格式修复，默认保持一次。"""
+    monkeypatch.delenv("MODELER_MAX_REPAIR_ATTEMPTS", raising=False)
+    assert (
+        Settings(_env_file=None).MODELER_MAX_REPAIR_ATTEMPTS  # type: ignore[call-arg]
+        == 1
+    )
+
+    monkeypatch.setenv("MODELER_MAX_REPAIR_ATTEMPTS", "3")
+    assert (
+        Settings(_env_file=None).MODELER_MAX_REPAIR_ATTEMPTS  # type: ignore[call-arg]
+        == 3
+    )
+
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            MODELER_MAX_REPAIR_ATTEMPTS=4,
+        )
 
 
 def test_smoke_fixture_is_a_complete_domain_problem():

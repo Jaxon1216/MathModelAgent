@@ -172,6 +172,41 @@ def test_modeler_stage_stops_after_one_failed_repair():
     assert tracer.events[-1][1]["failure_kind"] == "invalid_response"
 
 
+def test_modeler_honors_configured_repair_attempts():
+    """修复次数应独立配置，且不改变首次请求计数。"""
+    client = FakeLLMClient(
+        [
+            "not-json-1",
+            "not-json-2",
+            json.dumps(_payload(), ensure_ascii=False),
+        ]
+    )
+
+    plan = asyncio.run(
+        ModelerWorkflow(ModelerAgent(client, max_repair_attempts=2)).create_plan(
+            _problem()
+        )
+    )
+
+    assert set(plan.question_plans) == {"ques1"}
+    assert len(client.messages) == 3
+
+
+def test_modeler_can_disable_repairs():
+    """配置为零时，非法首轮响应必须立即失败。"""
+    client = FakeLLMClient(["not-json"])
+
+    with pytest.raises(ModelerStageError) as exc_info:
+        asyncio.run(
+            ModelerWorkflow(ModelerAgent(client, max_repair_attempts=0)).create_plan(
+                _problem()
+            )
+        )
+
+    assert exc_info.value.attempts == 1
+    assert len(client.messages) == 1
+
+
 def test_legacy_llm_adapter_disables_provider_retries():
     """唯一旧 LLM 适配器必须保留 Modeler 身份并禁用内部重试。"""
     legacy_llm = LegacyLLMStub()

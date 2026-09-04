@@ -42,6 +42,7 @@ class WorkFlow:
 
 class MathModelWorkFlow(WorkFlow):
     """数学建模工作流，协调协调者、建模手、代码手和写作手完成完整建模任务。"""
+
     task_id: str  #
     work_dir: str  # worklow work dir
     ques_count: int = 0  # 问题数量
@@ -85,13 +86,16 @@ class MathModelWorkFlow(WorkFlow):
             if not key_val or not str(key_val).strip():
                 missing.append(f"{name} API Key")
         if missing:
-            raise ValueError(f"以下配置缺失，请先在设置中填写并保存：{', '.join(missing)}")
+            raise ValueError(
+                f"以下配置缺失，请先在设置中填写并保存：{', '.join(missing)}"
+            )
 
         llm_factory = LLMFactory(self.task_id)
         coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
 
         coordinator_agent = CoordinatorAgent(
-            self.task_id, coordinator_llm,
+            self.task_id,
+            coordinator_llm,
             context_window=settings.COORDINATOR_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
@@ -134,6 +138,7 @@ class MathModelWorkFlow(WorkFlow):
 
         modeler_agent = ModelerAgent(
             LegacyLLMClient(modeler_llm, cancel_event=self.cancel_event),
+            max_repair_attempts=settings.MODELER_MAX_REPAIR_ATTEMPTS,
         )
         await trace_recorder.emit(
             self.task_id,
@@ -183,7 +188,7 @@ class MathModelWorkFlow(WorkFlow):
             interpreter_type="local",
             work_dir=self.work_dir,
         )
-        
+
         assert settings.OPENALEX_EMAIL is not None, "OPENALEX_EMAIL 未配置"
         scholar = OpenAlexScholar(
             task_id=self.task_id,
@@ -276,7 +281,10 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             writer_prompt = flows.get_writer_prompt(
-                key, coder_response.code_response or "", code_interpreter, config_template
+                key,
+                coder_response.code_response or "",
+                code_interpreter,
+                config_template,
             )
 
             await redis_manager.publish_message(

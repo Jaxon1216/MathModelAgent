@@ -17,7 +17,7 @@ from app.runtime.llm.client import ChatMessage, LLMClient
 
 
 class ModelerResponseError(RuntimeError):
-    """一次修复后仍无法获得合法 ModelPlan。"""
+    """有限修复后仍无法获得合法 ModelPlan。"""
 
     def __init__(self, errors: tuple[str, ...], attempts: int) -> None:
         self.errors = errors
@@ -31,11 +31,19 @@ class ModelerResponseError(RuntimeError):
 class ModelerAgent:
     """仅接收领域问题并返回领域建模计划。"""
 
-    def __init__(self, client: LLMClient) -> None:
+    def __init__(
+        self,
+        client: LLMClient,
+        *,
+        max_repair_attempts: int = 1,
+    ) -> None:
+        if not 0 <= max_repair_attempts <= 3:
+            raise ValueError("max_repair_attempts 必须在 0 到 3 之间")
         self._client = client
+        self._max_repair_attempts = max_repair_attempts
 
     async def run(self, problem: Problem) -> ModelPlan:
-        """生成计划，并在契约错误时仅请求一次修复。
+        """生成计划，并按配置对契约错误进行有限修复。
 
         Args:
             problem: 题目、问题集合和已验证数据目录。
@@ -44,13 +52,14 @@ class ModelerAgent:
             已通过 Pydantic 和领域引用校验的 ModelPlan。
 
         Raises:
-            ModelerResponseError: 初始响应和一次修复均不合法。
+            ModelerResponseError: 初始响应和配置的修复尝试均不合法。
         """
         validator = PlanValidation.for_problem(problem)
         base_messages = self._base_messages(problem)
         errors: tuple[str, ...] = ()
 
-        for attempt in range(1, 3):
+        max_attempts = 1 + self._max_repair_attempts
+        for attempt in range(1, max_attempts + 1):
             messages = list(base_messages)
             if errors:
                 messages.append(
@@ -66,7 +75,7 @@ class ModelerAgent:
             except ModelPlanValidationError as exc:
                 errors = exc.errors
 
-        raise ModelerResponseError(errors, attempts=2)
+        raise ModelerResponseError(errors, attempts=max_attempts)
 
     @staticmethod
     def _base_messages(problem: Problem) -> list[ChatMessage]:

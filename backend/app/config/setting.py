@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
 from typing import Annotated, Optional
@@ -10,6 +10,7 @@ from typing import Annotated, Optional
 
 class ApiType(str, Enum):
     """LLM API 类型。"""
+
     OPENAI_CHAT = "openai-chat"
     OPENAI_RESPONSES = "openai-responses"
     ANTHROPIC = "anthropic"
@@ -33,6 +34,7 @@ def parse_cors(value: str) -> list[str]:
 
 class Settings(BaseSettings):
     """全局应用配置，从环境变量和 .env 文件加载。"""
+
     ENV: str = "dev"
 
     COORDINATOR_API_TYPE: Optional[ApiType] = None
@@ -48,6 +50,7 @@ class Settings(BaseSettings):
     MODELER_BASE_URL: Optional[str] = None
     MODELER_MAX_TOKENS: Optional[int] = None
     MODELER_CONTEXT_WINDOW: int = 128000
+    MODELER_MAX_REPAIR_ATTEMPTS: int = Field(default=1, ge=0, le=3)
 
     CODER_API_TYPE: Optional[ApiType] = None
     CODER_API_KEY: Optional[str] = None

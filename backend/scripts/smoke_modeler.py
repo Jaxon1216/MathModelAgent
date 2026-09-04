@@ -81,6 +81,7 @@ def model_config_snapshot() -> dict[str, Any]:
             else None
         ),
         "max_tokens": settings.MODELER_MAX_TOKENS,
+        "max_repair_attempts": settings.MODELER_MAX_REPAIR_ATTEMPTS,
         "prompt_contract": "m1",
     }
 
@@ -170,7 +171,10 @@ async def _run_once(
     )
     client = RecordingLLMClient(LegacyLLMClient(legacy_llm))
     workflow = ModelerWorkflow(
-        ModelerAgent(client),
+        ModelerAgent(
+            client,
+            max_repair_attempts=settings.MODELER_MAX_REPAIR_ATTEMPTS,
+        ),
         tracer=LegacyStageTracer(),
     )
     started_at = time.monotonic()
