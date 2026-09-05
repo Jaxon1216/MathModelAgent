@@ -1,10 +1,11 @@
 """工作流程定义模块，管理建模任务的求解和写作流程。"""
 
 from app.domain.m15 import DataContract
+from app.domain.result_package import ResultPackage
 from app.models.user_output import UserOutput
 from app.orchestration.task_outline import TaskSchedule
+from app.results import render_result_package_for_writer
 from app.schemas.A2A import ModelerToCoder
-from app.tools.base_interpreter import BaseCodeInterpreter
 
 
 class Flows:
@@ -119,37 +120,54 @@ class Flows:
     def get_writer_prompt(
         self,
         key: str,
-        coder_response: str,
-        code_interpreter: BaseCodeInterpreter,
+        result_package: ResultPackage | None,
         config_template: dict,
+        fallback_summary: str = "",
     ) -> str:
         """根据不同的key生成对应的writer_prompt
 
         Args:
             key: 任务类型
-            coder_response: 代码执行结果
+            result_package: 当前 phase 的终态结果包。
+            config_template: 论文模板。
+            fallback_summary: package 落盘失败时保留的受限摘要。
 
         Returns:
             str: 生成的writer_prompt
         """
-        code_output = code_interpreter.get_code_output(key)
-
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
+        package_material = (
+            render_result_package_for_writer(result_package)
+            if result_package is not None
+            else (
+                "ResultPackage 落盘失败。不得编造精确数字、图表或结论。"
+                f"仅可谨慎使用以下兼容摘要：{fallback_summary}"
+            )
+        )
         quesx_writer_prompt = {
             key: f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template[key]}
+                    问题背景{bgc},不需要编写代码。
+                    以下 ResultPackage 是阶段结果的唯一来源：
+                    {package_material}
+                    按照如下模板撰写：{config_template[key]}
                 """
             for key in questions_quesx_keys
         }
 
         writer_prompt = {
             "eda": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["eda"]}
+                    问题背景{bgc},不需要编写代码。
+                    以下 ResultPackage 是阶段结果的唯一来源：
+                    {package_material}
+                    按照如下模板撰写：{config_template["eda"]}
                 """,
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["sensitivity_analysis"]}
+                    问题背景{bgc},不需要编写代码。
+                    以下 ResultPackage 是阶段结果的唯一来源：
+                    {package_material}
+                    按照如下模板撰写：{config_template["sensitivity_analysis"]}
                 """,
         }
 

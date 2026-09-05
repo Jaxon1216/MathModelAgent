@@ -69,10 +69,14 @@ class TraceRecorder:
             return f"phase.end · {payload.get('phase', phase or '')} · {status}{dur}"
 
         if event == "skill.load":
+            version = payload.get("version")
+            version_part = f", version={version}" if version else ""
+            source = payload.get("load_source")
+            source_part = f", source={source}" if source else ""
             return (
                 f"skill.load{phase_part} · {payload.get('skill_name', '')} · "
                 f"found={payload.get('found', False)}, "
-                f"{payload.get('body_chars', 0)} chars"
+                f"{payload.get('body_chars', 0)} chars{version_part}{source_part}"
             )
 
         if event == "tool.call":

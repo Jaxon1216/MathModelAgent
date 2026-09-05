@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.domain.result_package import ResultPackage
+
 
 class CoordinatorToModeler(BaseModel):
     """协调者传递给建模手的数据结构。"""
@@ -19,7 +21,7 @@ class ModelerToCoder(BaseModel):
 
 
 class CoderToWriter(BaseModel):
-    """代码手传递给写作手的数据结构。"""
+    """代码手传递给写作手的兼容交接与终态 ResultPackage。"""
 
     status: Literal["success", "partial"] = "success"
 
@@ -30,6 +32,7 @@ class CoderToWriter(BaseModel):
     verified_metrics: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     last_error: str | None = None
+    result_package: ResultPackage | None = None
 
 
 class ReferenceEvidence(BaseModel):

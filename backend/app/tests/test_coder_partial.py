@@ -75,9 +75,6 @@ def test_retry_exhaustion_returns_partial_verified_evidence(
         code_interpreter=cast(BaseCodeInterpreter, interpreter),
     )
 
-    async def no_skills(subtask_title: str) -> None:
-        return None
-
     responses = iter(
         [
             StandardResponse(
@@ -91,7 +88,6 @@ def test_retry_exhaustion_returns_partial_verified_evidence(
     async def fake_chat(**kwargs):
         return next(responses)
 
-    monkeypatch.setattr(coder, "_ensure_phase_skills", no_skills)
     monkeypatch.setattr(coder, "_chat", fake_chat)
 
     result = asyncio.run(coder.run("solve", "ques1"))

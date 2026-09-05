@@ -98,5 +98,5 @@
 | 根目录 | `/Users/bytedance/code/Easton/mma/HelloAgents` |
 | 参考 | `/Users/bytedance/code/Easton/mma/HelloAgents/hello_agents/skills/loader.py` |
 | | `/Users/bytedance/code/Easton/mma/HelloAgents/hello_agents/skills/__init__.py` |
-| 对照 | `/Users/bytedance/code/Easton/mma/MathModelAgent/backend/app/core/skills/loader.py` |
-| 价值 | L1 只扫 frontmatter（`get_descriptions`）→ L2 按需 `get_skill` body → L3 `references/` / `scripts/`。我们 loader 已仿 L1/L2，但 `_ensure_phase_skills` 仍把 3 份全文预注入。应预注入短描述，正文与图模板按需加载。 |
+| 对照 | `/Users/bytedance/code/Easton/mma/MathModelAgent/backend/app/core/skills/registry.py` |
+| 价值 | L1 只扫 frontmatter（`get_descriptions`）→ L2 按需 `load_skill` body → L3 `references/` / `scripts/`。当前 `SkillRegistry` 已实现 L1/L2；M2 不引入 L3。 |

@@ -81,8 +81,8 @@ def test_compare_scorecards_reports_deltas():
     assert metrics["agent_quality.execute_error_rate"]["delta"] == -0.05
 
 
-def test_m1_tool_gate_requires_execute_code_but_not_load_skill():
-    """M1 预注入技能正文时，只把真实代码执行作为工具硬门禁。"""
+def test_execute_tool_gate_requires_actual_execution():
+    """工具门禁独立检查真实代码执行调用。"""
     baseline = {"must_call_tools": ["execute_code"]}
 
     passing = check_regression(
@@ -103,6 +103,68 @@ def test_m1_tool_gate_requires_execute_code_but_not_load_skill():
             "threshold": "called",
             "pass": False,
         }
+    ]
+
+
+def test_skill_load_gate_requires_traced_l2_call_for_required_phase():
+    """M2 只在声明需要能力的 phase 检查真实 L2 skill 调用。"""
+    events = [
+        {
+            "event": "tool.call",
+            "phase": "ques1",
+            "payload": {
+                "tool_name": "load_skill",
+                "tool_call_id": "load-visualization",
+            },
+        },
+        {
+            "event": "skill.load",
+            "phase": "ques1",
+            "payload": {
+                "tool_call_id": "load-visualization",
+                "skill_name": "visualization",
+                "found": True,
+                "load_source": "tool_call",
+            },
+        },
+        {
+            "event": "skill.load",
+            "phase": "ques2",
+            "payload": {
+                "tool_call_id": "preloaded",
+                "skill_name": "visualization",
+                "found": True,
+                "load_source": "preloaded",
+            },
+        },
+    ]
+    scorecard = {"agent_quality": compute_agent_quality(events)}
+    baseline = {
+        "required_skill_loads_by_phase": {
+            "ques1": ["visualization"],
+            "ques2": ["visualization"],
+        }
+    }
+
+    result = check_regression(scorecard, baseline)
+
+    assert scorecard["agent_quality"]["loaded_skills_by_phase"] == {
+        "ques1": ["visualization"]
+    }
+    assert result["all_pass"] is False
+    assert result["checks"] == [
+        {
+            "metric": "required_skill_loads_by_phase.ques1.visualization",
+            "value": "called",
+            "threshold": "called",
+            "pass": True,
+        },
+        {
+            "metric": "required_skill_loads_by_phase.ques2.visualization",
+            "value": "missing",
+            "threshold": "called",
+            "pass": False,
+        },
     ]
 
 

@@ -166,12 +166,35 @@ M1 的完成定义全部满足并有实验记录后才开始 M1.5。本阶段按
 
 ### 前置条件与范围
 
-M1.5 的完成定义全部满足后才开始 M2。Coder 只消费已验证的
-`QuestionPlan`、`DataContract` 和已声明的上游 `ResultPackage`。本阶段目标是
-可验证、可终止、可追溯的执行，不扩展为泛化或无界 ReAct，也不引入通用 Agent
-编排框架。
+按 2026-09-05 的实现决策，M2 不等待 M1.5 E2E；M1 / M1.5 的真实运行证据仍按其
+各自门禁记录。本阶段只收口 Coder 的工具调用、phase 上下文和结果交接边界，保持
+现有 `QuestionPlan -> 文本兼容桥接 -> Coder` 主链路，不引入通用 Agent 编排框架、
+跨 phase 依赖阻断或新的总流程失败门禁。
 
 ### 第一个独立小提交：渐进式 SkillsLoader
+
+#### 实施状态（2026-09-05，已完成）
+
+- 已完成 L1/L2 与 Repair 短上下文的本地切片：`SkillRegistry` 只读取
+  frontmatter 建立 `SkillDescriptor` 索引，正文仅能由真实 `load_skill` tool call
+  取得，并以内容 SHA-256 前缀标识版本。
+- 已删除 Coder phase 起始时的正文预注入路径；成功、未知和非法 skill 请求均以对应
+  `tool_call_id` 回填，trace 记录名称、版本、加载结果、来源和 phase。Repair 仅保留
+  已加载 skill 的名称与版本，不复制正文。
+- 新增 L2 trace 到 eval 的按 phase 检查能力，但未修改现有基线或历史 scorecard。
+  聚焦测试 24 passed，目标 Pyright 0 errors。
+- P0 已修复：同一响应中混合 `load_skill` / `execute_code` 或包含多次
+  `execute_code` 时，按响应顺序执行，并在下一次模型请求前为每个
+  `tool_call_id` 回填成功或失败结果。
+- 每个 phase 开始均重置 Coder history 与 phase turn counter；受控工作目录和同一
+  解释器继续共享。Repair 耗尽会生成 `partial` ResultPackage，并继续交给 Writer，
+  不新增总流程阻塞。
+- `ResultPackage` 已原子落盘到 `result_packages/{phase}.json`，同时保存代码和
+  stdout 快照、文件指纹、图表、指标定位、限制和 partial 失败证据。Writer 改为消费
+  package 渲染材料；package 写入自身失败时仅记录 limitation 并保留原有交付路径。
+- 新增 ResultPackage、phase 隔离和 P0 工具循环测试。`make check` 为 223 passed、
+  1 skipped、1 deselected，目标 Pyright 0 errors。本轮未运行真实模型、完整 E2E、
+  `eval` 或 M1.5 E2E，也未改质量基线或历史 scorecard。
 
 - 工具 schema 中保留 catalog skill 的名称和简短 description，作为 L1 能力
   索引；不在 phase 开始时传入 skill 正文。
@@ -181,21 +204,16 @@ M1.5 的完成定义全部满足后才开始 M2。Coder 只消费已验证的
   实际需要相关技能的 phase 产生真实 `load_skill` tool call。
 - Repair 建立新短上下文时，只保留已加载 skill 的名称和版本标识，不复制已加载
   正文；需要正文时由模型按 L2 重新取得。
-- 当 `QuestionPlan` 或待修复问题要求绘图，而当前 phase 没有真实加载相关绘图
-  skill 时，Verifier 输出结构化问题并打回 Repair。
-- 该提交独立通过 loader、上下文和 trace 聚焦测试后，才开始执行状态机改造。
+- “要求绘图但未加载 skill”的专用 Verifier、通用 Inspect/Verify 状态机和跨 phase
+  依赖阻断不属于 M2 的完成定义；有明确收益时另立阶段。
 
 M2 不实现 HelloAgents L3 references、scripts 或其他资源读取。未来如确有需求，
 必须另立变更，并先定义路径白名单、单次与累计大小预算以及可追溯读取记录。
 
-### Phase 隔离与受限状态机
+### 已完成的 phase 隔离与工具循环
 
 - 每个问题 phase 创建独立短 history，不继承其他 phase 或自由对话历史；不同
   phase 继续共享同一个受控工作目录和解释器，以复用声明的文件产物。
-- 状态固定为 `Inspect -> Execute -> Verify -> Repair -> Verify`。Verifier
-  输出机器可读的问题，Repair 只能接收并处理这些问题，不能自由扩展目标。
-- 每个 phase 最多进入两次 Repair。第二次 Repair 后仍未通过 Verify 时，终止
-  phase 并输出失败结果和证据，不继续自由反思。
 - 同一模型响应包含一个或多个 tool call 时，执行循环按响应顺序处理全部调用；
   每个 `tool_call_id` 恰好回填一个成功或失败结果。全部结果回填前不得发起下一次
   模型请求。
@@ -207,24 +225,26 @@ M2 不实现 HelloAgents L3 references、scripts 或其他资源读取。未来�
 
 每个版本化 package 至少包含：
 
-- 成功或失败状态，以及对应问题和输入契约版本。
-- 代码或 Notebook 路径、指标与单位、图表 manifest、限制和适用范围。
-- 结构化校验结果；失败时还包括失败阶段、问题、已完成产物和失败证据。
-- 所有登记文件的路径与指纹，以及数值、图表和候选结论的稳定来源定位。
+- 成功或 partial 状态、对应 phase 和生成时间。
+- 代码与 stdout 快照、指标来源定位、图表、限制和适用范围。
+- partial 时的稳定失败分类、失败证据及已完成产物。
+- 所有登记文件的路径与 SHA-256 指纹。
 
-失败 package 仍须完整落盘。依赖失败 phase 的后续问题不得被标记成功，也不得
-通过自由文本绕过阻断。
+partial package 仍须完整落盘，并继续交付给 Writer；M2 不将 partial 或 package
+写入失败升级为总流程阻塞。跨问题依赖失败传播和最终发布阻断留待另立阶段。
 
 ### 验证与完成定义
 
-- SkillsLoader 小提交证明 phase 起始上下文不含正文、L2 调用可追踪、Repair
-  不重复携带正文，并覆盖需要绘图但未加载技能的失败路径。
-- 状态机测试覆盖 phase history 隔离、受控目录与解释器共享、多个 tool call
-  顺序执行和逐一回填、两次 Repair 上限及失败终止。
-- `ResultPackage` schema、文件指纹、来源定位、成功交接和依赖失败阻断均通过
-  契约测试；运行证据能从 package 定位到实际文件和校验结果。
-- 只有全部问题得到终态 `ResultPackage`，且没有把失败伪装为成功时，才关闭
-  M2 并进入论文证据冻结阶段。
+- phase 起始上下文不含预加载正文，L2 调用、名称、版本、调用 ID 和 phase 可追踪；
+  Repair 不重复携带正文。
+- 混合 `load_skill` / `execute_code`、多个 `execute_code`、未知工具和工具参数失败
+  均按顺序一一回填；回填完成前不发起下一次模型请求。
+- phase history / turn counter 隔离、共享解释器和工作目录，以及 Repair 耗尽后的
+  partial 交付均通过契约测试。
+- 成功和 partial `ResultPackage` 均带代码/输出快照、实际文件指纹和指标来源定位；
+  Writer 仅消费 package 材料，partial 不阻断论文交付。
+- 上述本地契约测试、Pyright 和 `make check` 全部通过即关闭 M2；真实 E2E 仍按 M1 /
+  M1.5 的独立证据规则执行。
 
 ## 后续阶段：M3 论文证据、写作与导出
 

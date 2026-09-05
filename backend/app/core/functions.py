@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.core.skills.loader import SkillLoader
+    from app.core.skills.registry import SkillRegistry
 
 # ---- OpenAI 格式（Chat Completions + Responses 共用） ----
 
@@ -53,7 +53,7 @@ def _build_load_skill_tool(skill_descriptions: str) -> dict:
     """构造 OpenAI 格式的 load_skill 工具 schema。
 
     Args:
-        skill_descriptions: 由 SkillLoader.get_descriptions() 返回的技能列表文本。
+        skill_descriptions: 由 SkillRegistry.get_descriptions() 返回的 L1 技能索引。
 
     Returns:
         OpenAI function calling 格式的工具 schema 字典。
@@ -90,7 +90,7 @@ def _build_load_skill_tool_anthropic(skill_descriptions: str) -> dict:
     """构造 Anthropic 格式的 load_skill 工具 schema。
 
     Args:
-        skill_descriptions: 由 SkillLoader.get_descriptions() 返回的技能列表文本。
+        skill_descriptions: 由 SkillRegistry.get_descriptions() 返回的 L1 技能索引。
 
     Returns:
         Anthropic tool 格式的 schema 字典。
@@ -118,33 +118,33 @@ def _build_load_skill_tool_anthropic(skill_descriptions: str) -> dict:
     }
 
 
-def get_coder_tools(skill_loader: SkillLoader) -> list:
+def get_coder_tools(skill_registry: SkillRegistry) -> list:
     """构造 CoderAgent 的 OpenAI 格式工具列表（包含 load_skill）。
 
     Args:
-        skill_loader: 已初始化的 SkillLoader 实例。
+        skill_registry: 已初始化的 L1 SkillRegistry。
 
     Returns:
         OpenAI function calling 格式的工具 schema 列表。
     """
     return [
         _EXECUTE_CODE_TOOL,
-        _build_load_skill_tool(skill_loader.get_descriptions()),
+        _build_load_skill_tool(skill_registry.get_descriptions()),
     ]
 
 
-def get_coder_tools_anthropic(skill_loader: SkillLoader) -> list:
+def get_coder_tools_anthropic(skill_registry: SkillRegistry) -> list:
     """构造 CoderAgent 的 Anthropic 格式工具列表（包含 load_skill）。
 
     Args:
-        skill_loader: 已初始化的 SkillLoader 实例。
+        skill_registry: 已初始化的 L1 SkillRegistry。
 
     Returns:
         Anthropic tool 格式的工具 schema 列表。
     """
     return [
         _EXECUTE_CODE_TOOL_ANTHROPIC,
-        _build_load_skill_tool_anthropic(skill_loader.get_descriptions()),
+        _build_load_skill_tool_anthropic(skill_registry.get_descriptions()),
     ]
 
 

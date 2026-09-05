@@ -1,5 +1,5 @@
-"""Skills 模块：为 CoderAgent 提供按需加载的领域知识技能。"""
+"""Skills 模块：为 CoderAgent 提供受控的 L1/L2 渐进式能力。"""
 
-from app.core.skills.loader import SkillLoader, Skill
+from app.core.skills.registry import LoadedSkill, SkillDescriptor, SkillRegistry
 
-__all__ = ["SkillLoader", "Skill"]
+__all__ = ["LoadedSkill", "SkillDescriptor", "SkillRegistry"]

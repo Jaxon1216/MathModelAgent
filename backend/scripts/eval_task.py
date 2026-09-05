@@ -58,6 +58,8 @@ def compute_agent_quality(
     completion_blocked = 0
     phase_fail = 0
     tool_counts: Counter = Counter()
+    load_skill_tool_calls: set[tuple[str, str]] = set()
+    successful_skill_loads: list[tuple[str, str, str]] = []
     turns_by_phase: dict[str, int] = {}
     started_phases: set[str] = set()
     ended_phases: dict[str, str] = {}
@@ -94,7 +96,28 @@ def compute_agent_quality(
             started_phases.add(phase)
 
         if event_type == "tool.call":
-            tool_counts[payload.get("tool_name", "unknown")] += 1
+            tool_name = payload.get("tool_name", "unknown")
+            tool_counts[tool_name] += 1
+            tool_call_id = payload.get("tool_call_id")
+            if (
+                tool_name == "load_skill"
+                and isinstance(phase, str)
+                and isinstance(tool_call_id, str)
+            ):
+                load_skill_tool_calls.add((phase, tool_call_id))
+
+        if event_type == "skill.load":
+            tool_call_id = payload.get("tool_call_id")
+            skill_name = payload.get("skill_name")
+            if (
+                payload.get("found") is True
+                and payload.get("load_source") == "tool_call"
+                and isinstance(phase, str)
+                and isinstance(tool_call_id, str)
+                and isinstance(skill_name, str)
+                and (phase, tool_call_id) in load_skill_tool_calls
+            ):
+                successful_skill_loads.append((phase, tool_call_id, skill_name))
 
         if event_type == "subtask.summary":
             if phase:
@@ -110,6 +133,13 @@ def compute_agent_quality(
     degraded_phases = sorted(
         phase for phase, status in ended_phases.items() if status == "degraded"
     )
+    loaded_skills_by_phase: dict[str, list[str]] = {}
+    for phase, _, skill_name in successful_skill_loads:
+        loaded_skills_by_phase.setdefault(phase, [])
+        if skill_name not in loaded_skills_by_phase[phase]:
+            loaded_skills_by_phase[phase].append(skill_name)
+    for skill_names in loaded_skills_by_phase.values():
+        skill_names.sort()
 
     return {
         "execute_error_rate": error_rate,
@@ -130,6 +160,7 @@ def compute_agent_quality(
         "degraded_phase_count": len(degraded_phases),
         "turns_per_phase": turns_by_phase,
         "tool_calls_by_name": dict(tool_counts),
+        "loaded_skills_by_phase": loaded_skills_by_phase,
     }
 
 
@@ -477,6 +508,24 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
                 }
             )
 
+    if "required_skill_loads_by_phase" in baseline:
+        loaded_by_phase = scorecard.get("agent_quality", {}).get(
+            "loaded_skills_by_phase",
+            {},
+        )
+        for phase, expected_skills in baseline["required_skill_loads_by_phase"].items():
+            actual = set(loaded_by_phase.get(phase, []))
+            for skill_name in expected_skills:
+                called = skill_name in actual
+                checks.append(
+                    {
+                        "metric": f"required_skill_loads_by_phase.{phase}.{skill_name}",
+                        "value": "called" if called else "missing",
+                        "threshold": "called",
+                        "pass": called,
+                    }
+                )
+
     all_pass = all(c["pass"] for c in checks) if checks else None
     return {
         "all_pass": all_pass,
@@ -554,6 +603,7 @@ def _flatten_metrics(scorecard: dict[str, Any], prefix: str = "") -> dict[str, A
         "turns_per_phase",
         "png_per_phase",
         "tool_calls_by_name",
+        "loaded_skills_by_phase",
         "phase_statuses",
         "started_phases",
         "missing_phase_ends",

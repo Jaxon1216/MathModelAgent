@@ -342,18 +342,10 @@ class MathModelWorkFlow(WorkFlow):
 
                 writer_prompt = flows.get_writer_prompt(
                     key,
-                    coder_response.code_response or "",
-                    code_interpreter,
+                    coder_response.result_package,
                     config_template,
+                    fallback_summary=coder_response.code_response or "",
                 )
-                if coder_response.status == "partial":
-                    writer_prompt += (
-                        "\n本阶段状态为 partial。只能使用下列已验证材料撰写，"
-                        "不得引用执行错误、未验证推断或把阶段描述为完全收敛。\n"
-                        f"已验证指标：{coder_response.verified_metrics}\n"
-                        f"已验证产物：{coder_response.created_artifacts}\n"
-                        f"限制：{coder_response.limitations}\n"
-                    )
 
                 await redis_manager.publish_message(
                     self.task_id,
@@ -363,7 +355,14 @@ class MathModelWorkFlow(WorkFlow):
                 ## TODO: 图片引用错误
                 writer_response = await writer_agent.run(
                     writer_prompt,
-                    available_images=coder_response.created_images,
+                    available_images=(
+                        [
+                            figure.path
+                            for figure in coder_response.result_package.figures
+                        ]
+                        if coder_response.result_package is not None
+                        else coder_response.created_images
+                    ),
                     sub_title=key,
                 )
                 if writer_response.status != "success":

@@ -35,6 +35,12 @@ from .model_plan import (
     QuestionPlanValidationError,
 )
 from .problem import DataCatalog, DataColumn, DataTable, Problem, QuestionSet
+from .result_package import (
+    FailureEvidence,
+    ResultArtifact,
+    ResultMetric,
+    ResultPackage,
+)
 
 __all__ = [
     "CandidateKey",
@@ -54,6 +60,7 @@ __all__ = [
     "DataTable",
     "Deliverable",
     "FileFact",
+    "FailureEvidence",
     "JoinEvidence",
     "ModelPlan",
     "ModelPlanValidationError",
@@ -67,6 +74,9 @@ __all__ = [
     "QuestionPlanValidation",
     "QuestionPlanValidationError",
     "QuestionSet",
+    "ResultArtifact",
+    "ResultMetric",
+    "ResultPackage",
     "TaskFacts",
     "TaskOutline",
     "UpstreamResultReference",
