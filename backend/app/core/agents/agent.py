@@ -31,6 +31,7 @@ class Agent:
         self.token_threshold_ratio = token_threshold_ratio
         self.current_token_count = 0  # 当前历史的估算 token 数
         self.cancel_event = cancel_event  # 取消信号
+        self.history_scope = "default"
 
     def _estimate_tokens(self, text: str) -> int:
         """估算文本的 token 数量。"""
@@ -39,8 +40,52 @@ class Agent:
     def _estimate_message_tokens(self, msg: dict) -> int:
         """估算单条消息的 token 数（含结构开销）。"""
         content = msg.get("content") or ""
+        tool_arguments = "".join(
+            str(tool_call.get("function", {}).get("arguments", ""))
+            for tool_call in msg.get("tool_calls", [])
+            if isinstance(tool_call, dict)
+        )
         # 4 token 额外开销（role、分隔符等）
-        return self._estimate_tokens(content) + 4
+        return self._estimate_tokens(f"{content}{tool_arguments}") + 4
+
+    def reset_history(self, scope: str = "default") -> None:
+        """为新的独立工作范围清空对话状态。"""
+        self.chat_history = []
+        self.current_token_count = 0
+        self.history_scope = scope
+
+    async def record_response(
+        self,
+        response: Any,
+        *,
+        allow_compress: bool = True,
+    ) -> None:
+        """按统一格式记录模型响应，并保护工具调用配对。"""
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": response.content or "",
+        }
+        if response.reasoning_content:
+            message["reasoning_content"] = response.reasoning_content
+        if response.tool_calls:
+            message["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                    },
+                }
+                for tool_call in response.tool_calls
+            ]
+
+        if allow_compress:
+            await self.append_chat_history(message)
+            return
+
+        self.chat_history.append(message)
+        self.current_token_count += self._estimate_message_tokens(message)
 
     async def _chat(self, **kwargs) -> Any:
         """调用 LLM 模型，支持取消中断。

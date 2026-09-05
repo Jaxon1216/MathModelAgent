@@ -1,6 +1,9 @@
 {
   "_description": "2024高教杯C题（农作物的种植策略）基线期望。仓库唯一评测赛题，3 个子问题。",
-  "must_call_tools": ["execute_code", "load_skill"],
+  "expected_ques_count": 3,
+  "required_solution_phases": ["eda", "ques1", "ques2", "ques3", "sensitivity_analysis"],
+  "required_paper_sections": ["firstPage", "RepeatQues", "analysisQues", "modelAssumption", "symbol", "eda", "ques1", "ques2", "ques3", "sensitivity_analysis", "judge"],
+  "must_call_tools": ["execute_code"],
   "min_png_per_ques": 2,
   "max_execute_error_rate": 0.15,
   "max_empty_sections": 0,

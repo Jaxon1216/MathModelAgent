@@ -3,6 +3,9 @@
 import asyncio
 import json
 import os
+import re
+import zipfile
+from pathlib import Path
 
 from app.core.agents.agent import Agent
 from app.config.setting import settings, ApiType
@@ -115,12 +118,14 @@ class CoderAgent(Agent):
                     f"任务失败，超过最大尝试次数 {self.max_retries}，"
                     f"最后错误信息: {last_error_message}"
                 )
-                return CoderToWriter(
-                    code_response=(
-                        f"任务失败，超过最大尝试次数 {self.max_retries}，"
-                        f"最后错误信息: {last_error_message}"
-                    ),
-                    created_images=[],
+                return await self._build_coder_response(
+                    subtask_title=subtask_title,
+                    status="partial",
+                    turns=subtask_turns,
+                    retries=retry_count,
+                    code_response="本阶段未完全收敛，仅可使用已验证的执行输出和产物。",
+                    limitations=[f"retry_exhausted: {self.max_retries}"],
+                    last_error=last_error_message,
                 )
 
             if (
@@ -132,8 +137,14 @@ class CoderAgent(Agent):
                     self.task_id,
                     SystemMessage(content="超过最大聊天次数", type="error"),
                 )
-                raise Exception(
-                    f"Reached maximum number of chat turns ({self.max_chat_turns}). Task incomplete."
+                return await self._build_coder_response(
+                    subtask_title=subtask_title,
+                    status="partial",
+                    turns=subtask_turns,
+                    retries=retry_count,
+                    code_response="本阶段达到对话轮数上限，仅可使用已验证的执行输出和产物。",
+                    limitations=[f"turn_limit: {self.max_chat_turns}"],
+                    last_error=last_error_message or None,
                 )
 
             self.current_chat_turns += 1
@@ -380,12 +391,13 @@ class CoderAgent(Agent):
                         continue
 
                     logger.info("completion check 通过，子任务完成")
-                    await self._emit_subtask_summary(
-                        subtask_title, subtask_turns, retry_count, created_images
-                    )
-                    return CoderToWriter(
+                    return await self._build_coder_response(
+                        subtask_title=subtask_title,
+                        status="success",
+                        turns=subtask_turns,
+                        retries=retry_count,
                         code_response=response.content,
-                        created_images=created_images,
+                        preferred_images=created_images,
                     )
 
             except Exception as e:
@@ -467,12 +479,131 @@ class CoderAgent(Agent):
             return str(args.get("skill_name", ""))
         return ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
 
+    async def _build_coder_response(
+        self,
+        *,
+        subtask_title: str,
+        status: str,
+        turns: int,
+        retries: int,
+        code_response: str | None,
+        preferred_images: list[str] | None = None,
+        limitations: list[str] | None = None,
+        last_error: str | None = None,
+    ) -> CoderToWriter:
+        """从成功执行输出和可读取文件构造受控交接。"""
+        assert self.code_interpreter is not None
+        code_output = self.code_interpreter.get_code_output(subtask_title)
+        candidates = self.code_interpreter.get_section_artifacts(subtask_title)
+        verified_artifacts = [
+            path for path in candidates if self._artifact_is_readable(path)
+        ]
+        preferred = set(preferred_images or [])
+        verified_images = [
+            path
+            for path in verified_artifacts
+            if Path(path).suffix.lower() in {".png", ".jpg", ".jpeg"}
+            and (not preferred or path in preferred or Path(path).name in preferred)
+        ]
+        if not verified_images:
+            verified_images = [
+                path
+                for path in verified_artifacts
+                if Path(path).suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ]
+
+        result_limitations = list(limitations or [])
+        metrics = self._extract_verified_metrics(code_output)
+        if status == "partial" and not (verified_artifacts or metrics):
+            result_limitations.append("verified_evidence_missing")
+
+        await trace_recorder.emit(
+            self.task_id,
+            "coder.result",
+            agent=self.__class__.__name__,
+            phase=subtask_title,
+            status=status,
+            artifact_count=len(verified_artifacts),
+            image_count=len(verified_images),
+            metric_count=len(metrics),
+            limitations=result_limitations,
+            last_error_preview=(last_error or "")[:500],
+        )
+        await self._emit_subtask_summary(
+            subtask_title,
+            turns,
+            retries,
+            verified_images,
+            status=status,
+            artifact_count=len(verified_artifacts),
+        )
+        return CoderToWriter(
+            status="partial" if status == "partial" else "success",
+            code_response=code_response,
+            code_output=code_output,
+            created_images=verified_images,
+            created_artifacts=verified_artifacts,
+            verified_metrics=metrics,
+            limitations=result_limitations,
+            last_error=last_error,
+        )
+
+    def _artifact_is_readable(self, relative_path: str) -> bool:
+        """验证产物位于 work_dir 内、非空且格式可读取。"""
+        root = Path(self.work_dir).resolve()
+        path = (root / relative_path).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return False
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        suffix = path.suffix.lower()
+        try:
+            with path.open("rb") as stream:
+                header = stream.read(8)
+            if suffix == ".png":
+                return header == b"\x89PNG\r\n\x1a\n"
+            if suffix in {".jpg", ".jpeg"}:
+                return header.startswith(b"\xff\xd8")
+            if suffix == ".xlsx":
+                return zipfile.is_zipfile(path)
+            if suffix == ".xls":
+                return header.startswith(b"\xd0\xcf\x11\xe0")
+            if suffix == ".npy":
+                return header.startswith(b"\x93NUMPY")
+            if suffix == ".csv":
+                with path.open(encoding="utf-8-sig") as stream:
+                    return bool(stream.readline().strip())
+        except (OSError, UnicodeError, zipfile.BadZipFile):
+            return False
+        return False
+
+    @staticmethod
+    def _extract_verified_metrics(code_output: str) -> list[str]:
+        """只从成功执行 stdout 中提取有限数值事实。"""
+        metrics: list[str] = []
+        for line in code_output.splitlines():
+            normalized = " ".join(line.split())
+            if not normalized or len(normalized) > 300:
+                continue
+            if not re.search(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|%", normalized):
+                continue
+            if normalized not in metrics:
+                metrics.append(normalized)
+            if len(metrics) >= 20:
+                break
+        return metrics
+
     async def _emit_subtask_summary(
         self,
         subtask_title: str,
         turns: int,
         retries: int,
         created_images: list[str],
+        *,
+        status: str = "success",
+        artifact_count: int = 0,
     ) -> None:
         """子任务结束时输出 Trace 汇总。"""
         png_count = len(created_images)
@@ -488,6 +619,8 @@ class CoderAgent(Agent):
             phase=subtask_title,
             turns=turns,
             retries=retries,
+            status=status,
             png_count=png_count,
             csv_count=csv_count,
+            artifact_count=artifact_count,
         )

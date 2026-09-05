@@ -1,7 +1,7 @@
-.PHONY: lint format test test-modeler smoke-modeler typecheck check eval
+.PHONY: lint format test test-modeler smoke-modeler typecheck check eval e2e-fixture
 
 lint:
-	uv run ruff check app/ tests/ scripts/smoke_modeler.py
+	uv run ruff check app/ tests/ scripts/smoke_modeler.py scripts/run_fixture.py
 
 format:
 	uv run ruff format app/ tests/ scripts/
@@ -32,3 +32,6 @@ eval:
 	uv run python scripts/eval_task.py --task-id $(TASK_ID) \
 	  --baseline fixtures/baseline/2024高教杯C题/expected.json \
 	  --save-scorecard
+
+e2e-fixture:
+	uv run python scripts/run_fixture.py --source "$(or $(FIXTURE),2024高教杯C题)"

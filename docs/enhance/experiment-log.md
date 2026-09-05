@@ -122,3 +122,68 @@
 | 1 | true | 144473 | 1 | true |  |
 | 2 | true | 197216 | 1 | true |  |
 | 3 | true | 211317 | 1 | true |  |
+
+## 2026-09-05 - M1 固定配置完整 E2E（门禁未通过）
+
+- task id：`20260905-095821-1cf855ad`。
+- git revision：`0cc1611004759e45c8712f6c417c097a3b855ece`；工作树和 M1
+  source 均为 dirty，具体 fixture、输入文件 SHA256 和配置快照已写入 trace
+  的 `fixture.run` 事件。
+- fixture：`fixtures/problems/2024高教杯C题.json`；四个 Agent 均使用
+  `deepseek-v4-pro` / `openai-chat`；配置指纹 `fbd58cbb717ee7a6`。
+- 本地护栏：`make test-modeler` 29 passed；`make check` 49 passed、
+  1 skipped、1 live deselected。
+- runner 成功生成 `res.md` 和 `res.docx`；DOCX 含图片和公式对象。
+- scorecard：
+  `fixtures/baseline/2024高教杯C题/scorecards/20260905-095821-1cf855ad.json`；
+  trace：`logs/traces/20260905-095821-1cf855ad.jsonl`。
+- 评分结果：`regression_check.all_pass=false`。`phase_fail=0`、
+  `execute_error_rate=0.079`、`image_coverage=0.818`，但
+  `empty_section_count=1`，空章节为 `ques3`。
+- 根因证据：Q3 Coder 成功并生成两张图；Writer 连续两轮返回
+  `search_papers` tool call，当前 Writer 只处理首轮工具，第二轮直接读取空
+  `content`，最终 `res.json.ques3.response_content=""`。这是基线 Writer
+  多工具循环缺口，不是 Modeler 或 Q3 求解失败。
+- 按路线图，本轮不运行第二次 E2E，不启动 M1.5；M1 保持未完成。
+
+## 2026-09-05 - M1 Writer 修复后 E2E（人工中断）
+
+- task id：`20260905-131531-6f928758`；git revision：
+  `0cc1611004759e45c8712f6c417c097a3b855ece`，工作树和 M1 source 均为 dirty。
+- 四个 Agent 均使用 `deepseek-v4-pro` / `openai-chat`；配置指纹
+  `a27d3affa9302ccd`，Writer 工具轮数上限 2、搜索调用上限 4、OpenAlex
+  超时 15 秒。
+- 运行前护栏：`make test-modeler` 29 passed；`make check` 60 passed、
+  1 skipped、1 live deselected；本次涉及文件 Pyright 0 errors。
+- 运行完成 Coordinator、Modeler、EDA 和 EDA Writer；Q1 已生成两份结果表、
+  4 张图和多项中间证据，但第三次 Coder 执行错误触发 retry 上限，进入 Q1
+  Writer 后由用户中断。
+- 中断时 trace 有 90 次 LLM response、84 次 execute、5 次 reflect、1 个
+  subtask.summary；未生成 `res.md` 或 `res.docx`，未生成 scorecard。
+- 本轮属于人工中断证据，不构成 M1 成功或失败验收；按单次 E2E 约束不自动重跑，
+  M1 保持开启，不启动 M1.5/M2。
+
+## 2026-09-05 - Writer warning 与 Coder partial 语义 E2E
+
+- task id：`20260905-140132-e19ba578`；四个 Agent 均使用
+  `deepseek-v4-pro` / `openai-chat`；配置指纹 `a27d3affa9302ccd`。
+- 运行前护栏：`make test-modeler` 29 passed；`make check` 62 passed、
+  1 skipped、1 live deselected；全量 Pyright 0 errors。
+- runner 成功生成 `res.md`（约 44 KB）和 `res.docx`（约 1.1 MB）。
+  论文 11 个预期章节全部存在且非空，Word 含图片与公式。
+- Coder 状态：Q1 `success`；EDA、Q2、Q3、敏感性分析在 retry 耗尽后为
+  `partial`。Q2 保留 4 个可读产物、3 张图和 20 条成功执行指标；Q3 虽无
+  新增图表，但保留 20 条成功执行指标。最后错误只写入 `coder.result`
+  trace，未进入论文正文。
+- Writer 所有章节均生成成功。论文检索与引用白名单正常，最终有 8 条参考文献、
+  10 次正文引用；正文中无 `KeyError`、`Traceback`、检索错误或未完成占位。
+- scorecard：
+  `fixtures/baseline/2024高教杯C题/scorecards/20260905-140132-e19ba578.json`；
+  trace：`logs/traces/20260905-140132-e19ba578.jsonl`。
+- 指标：`phase_fail=0`、`missing_phase_end_count=0`、
+  `missing_subtask_summary_count=0`、`empty_section_count=0`、
+  `execute_error_rate=0.085`、`image_coverage=1.0`、9/9 图片均被引用。
+  总计 137 次 LLM 调用、7,785,303 tokens。
+- `regression_check.all_pass=false` 的唯一原因是 Q3 独立图片数为 0，低于原有
+  `min_png_per_ques=2`。该项作为论文质量缺口保留，不阻止本轮完整交付，也不
+  将 `partial/degraded` 自动升级为新的硬门禁。

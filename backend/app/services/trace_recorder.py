@@ -12,7 +12,9 @@ from app.schemas.response import TraceMessage
 from app.services.redis_manager import redis_manager
 from app.utils.log_util import logger
 
-current_trace_phase: ContextVar[str | None] = ContextVar("current_trace_phase", default=None)
+current_trace_phase: ContextVar[str | None] = ContextVar(
+    "current_trace_phase", default=None
+)
 
 
 def set_trace_phase(phase: str | None) -> None:
@@ -80,10 +82,7 @@ class TraceRecorder:
             )
 
         if event == "execute.start":
-            return (
-                f"execute.start{phase_part} · "
-                f"{payload.get('code_lines', 0)} lines"
-            )
+            return f"execute.start{phase_part} · {payload.get('code_lines', 0)} lines"
 
         if event == "execute.done":
             status = "error" if payload.get("error") else "ok"
@@ -129,10 +128,36 @@ class TraceRecorder:
         if event == "subtask.summary":
             return (
                 f"subtask.summary{phase_part} · "
+                f"status={payload.get('status', 'success')}, "
                 f"turns={payload.get('turns', 0)}, "
                 f"retries={payload.get('retries', 0)}, "
                 f"png={payload.get('png_count', 0)}, "
                 f"csv={payload.get('csv_count', 0)}"
+            )
+
+        if event == "writer.tool_round":
+            return (
+                f"writer.tool_round{phase_part} · "
+                f"round={payload.get('round', 0)}, "
+                f"tools={payload.get('tool_calls', 0)}"
+            )
+
+        if event == "writer.search":
+            return (
+                f"writer.search{phase_part} · "
+                f"success={payload.get('success', False)}, "
+                f"results={payload.get('result_count', 0)}"
+            )
+
+        if event == "writer.fallback":
+            return f"writer.fallback{phase_part} · reason={payload.get('reason', '')}"
+
+        if event == "writer.section_end":
+            return (
+                f"writer.section_end{phase_part} · "
+                f"status={payload.get('status', '')}, "
+                f"chars={payload.get('content_chars', 0)}, "
+                f"references={payload.get('reference_count', 0)}"
             )
 
         if event == "llm.response":

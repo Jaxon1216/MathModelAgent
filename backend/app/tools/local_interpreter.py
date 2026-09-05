@@ -2,6 +2,7 @@
 
 import os
 import time
+from typing import Literal
 
 import jupyter_client
 
@@ -50,7 +51,9 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 SystemMessage(content=font_msg, type=font_type),
             )
 
-    def _pre_execute_code(self) -> tuple[str | None, str]:
+    def _pre_execute_code(
+        self,
+    ) -> tuple[str | None, Literal["info", "warning", "success"]]:
         """执行 matplotlib 初始化，并解析字体加载结果供前端展示。
 
         Returns:
@@ -148,6 +151,8 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
         logger.info(f"text_to_gpt: {text_to_gpt}")
         combined_text = "\n".join(text_to_gpt)
+        if not error_occurred:
+            self.record_execution_output(combined_text)
 
         await self._push_to_websocket(content_to_display)
 

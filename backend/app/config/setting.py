@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     WRITER_BASE_URL: Optional[str] = None
     WRITER_MAX_TOKENS: Optional[int] = None
     WRITER_CONTEXT_WINDOW: int = 128000
+    WRITER_MAX_TOOL_ROUNDS: int = Field(default=2, ge=0)
+    WRITER_MAX_SEARCH_CALLS: int = Field(default=4, ge=0)
 
     MAX_CHAT_TURNS: Optional[int] = None
     MAX_RETRIES: Optional[int] = None
@@ -79,6 +81,7 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: Optional[str] = None
     OPENALEX_EMAIL: Optional[str] = None
     OPENALEX_API_KEY: Optional[str] = None
+    OPENALEX_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0)
 
     # Web Search 配置（Tavily API）
     TAVILY_API_KEY: Optional[str] = None

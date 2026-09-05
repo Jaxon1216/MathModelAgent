@@ -20,6 +20,7 @@ from app.tools.base_interpreter import BaseCodeInterpreter
 
 class E2BCodeInterpreter(BaseCodeInterpreter):
     """基于 E2B 沙箱的云端代码解释器。"""
+
     def __init__(
         self,
         task_id: str,
@@ -62,11 +63,13 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 raise FileNotFoundError(f"工作目录不存在: {self.work_dir}")
 
             files = [
-                f for f in os.listdir(self.work_dir)
+                f
+                for f in os.listdir(self.work_dir)
                 if f.endswith((".csv", ".xlsx", ".ttf", ".otf", ".ttc"))
             ]
             logger.info(f"工作目录中的文件列表: {files}")
 
+            assert self.sbx is not None
             for file in files:
                 file_path = os.path.join(self.work_dir, file)
                 if os.path.isfile(file_path):
@@ -291,6 +294,9 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             logger.info("文件同步完成")
         except Exception as e:
             logger.error(f"文件同步失败: {str(e)}")
+
+        if not error_occurred:
+            self.record_execution_output(combined_text)
 
         # 保存到分段内容
         ## TODO: Base64 等图像需要优化

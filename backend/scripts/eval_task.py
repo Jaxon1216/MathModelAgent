@@ -20,9 +20,7 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACES_DIR = PROJECT_ROOT / "logs" / "traces"
 WORK_DIR_ROOT = PROJECT_ROOT / "project" / "work_dir"
-DEFAULT_BASELINE_DIR = (
-    PROJECT_ROOT / "fixtures" / "baseline" / "2024高教杯C题"
-)
+DEFAULT_BASELINE_DIR = PROJECT_ROOT / "fixtures" / "baseline" / "2024高教杯C题"
 SCORECARDS_DIR = DEFAULT_BASELINE_DIR / "scorecards"
 
 
@@ -50,7 +48,10 @@ def load_trace(task_id: str) -> list[dict]:
 # ---- Agent 质量指标 ----
 
 
-def compute_agent_quality(events: list[dict]) -> dict[str, Any]:
+def compute_agent_quality(
+    events: list[dict],
+    required_phases: list[str] | None = None,
+) -> dict[str, Any]:
     """从 trace 事件计算 Agent 质量指标。"""
     execute_ok = execute_err = 0
     react_retry_total = 0
@@ -58,6 +59,9 @@ def compute_agent_quality(events: list[dict]) -> dict[str, Any]:
     phase_fail = 0
     tool_counts: Counter = Counter()
     turns_by_phase: dict[str, int] = {}
+    started_phases: set[str] = set()
+    ended_phases: dict[str, str] = {}
+    summarized_phases: set[str] = set()
 
     for ev in events:
         event_type = ev.get("event", "")
@@ -78,18 +82,34 @@ def compute_agent_quality(events: list[dict]) -> dict[str, Any]:
                 completion_blocked += 1
 
         if event_type == "phase.end":
-            if not payload.get("success", True):
+            status = payload.get("status")
+            if status is None:
+                status = "success" if payload.get("success", True) else "failed"
+            if phase:
+                ended_phases[phase] = status
+            if status in {"failed", "blocked"}:
                 phase_fail += 1
+
+        if event_type == "phase.start" and phase:
+            started_phases.add(phase)
 
         if event_type == "tool.call":
             tool_counts[payload.get("tool_name", "unknown")] += 1
 
         if event_type == "subtask.summary":
             if phase:
+                summarized_phases.add(phase)
                 turns_by_phase[phase] = payload.get("turns", 0)
 
     total_exec = execute_ok + execute_err
     error_rate = round(execute_err / total_exec, 3) if total_exec > 0 else 0
+
+    required = list(dict.fromkeys(required_phases or []))
+    missing_phase_ends = [phase for phase in required if phase not in ended_phases]
+    missing_summaries = [phase for phase in required if phase not in summarized_phases]
+    degraded_phases = sorted(
+        phase for phase, status in ended_phases.items() if status == "degraded"
+    )
 
     return {
         "execute_error_rate": error_rate,
@@ -98,6 +118,16 @@ def compute_agent_quality(events: list[dict]) -> dict[str, Any]:
         "react_retry_total": react_retry_total,
         "completion_blocked": completion_blocked,
         "phase_fail": phase_fail,
+        "phase_statuses": {
+            phase: ended_phases.get(phase, "missing") for phase in required
+        },
+        "started_phases": sorted(started_phases),
+        "missing_phase_ends": missing_phase_ends,
+        "missing_phase_end_count": len(missing_phase_ends),
+        "missing_subtask_summaries": missing_summaries,
+        "missing_subtask_summary_count": len(missing_summaries),
+        "degraded_phases": degraded_phases,
+        "degraded_phase_count": len(degraded_phases),
         "turns_per_phase": turns_by_phase,
         "tool_calls_by_name": dict(tool_counts),
     }
@@ -119,9 +149,7 @@ def compute_llm_metrics(events: list[dict]) -> dict[str, Any]:
     by_agent: dict[str, dict[str, int]] = defaultdict(
         lambda: {"calls": 0, "tokens": 0, "latency_ms": 0}
     )
-    by_model: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"calls": 0, "tokens": 0}
-    )
+    by_model: dict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "tokens": 0})
 
     for ev in events:
         if ev.get("event") != "llm.response":
@@ -170,10 +198,17 @@ def compute_llm_metrics(events: list[dict]) -> dict[str, Any]:
 
 
 def compute_figure_quality(
-    events: list[dict], work_dir: Path, res_md_path: Path
+    events: list[dict],
+    work_dir: Path,
+    res_md_path: Path,
+    expected_question_phases: list[str] | None = None,
 ) -> dict[str, Any]:
     """从 trace + work_dir 计算绘图质量指标。"""
-    png_by_phase: dict[str, int] = {}
+    png_by_phase: dict[str, int] = {
+        phase: 0
+        for phase in (expected_question_phases or [])
+        if phase.startswith("ques")
+    }
     png_total = 0
 
     for ev in events:
@@ -196,7 +231,9 @@ def compute_figure_quality(
     md_image_refs = 0
     if res_md_path.exists():
         md_text = res_md_path.read_text(encoding="utf-8")
-        md_image_refs = len(re.findall(r"!\[.*?\]\(.+?\.(?:png|jpg|jpeg|svg)\)", md_text))
+        md_image_refs = len(
+            re.findall(r"!\[.*?\]\(.+?\.(?:png|jpg|jpeg|svg)\)", md_text)
+        )
     image_coverage = (
         round(md_image_refs / work_dir_png_count, 3) if work_dir_png_count > 0 else 0
     )
@@ -278,14 +315,20 @@ def inspect_docx(docx_path: Path) -> dict[str, Any]:
 
 
 def compute_paper_structure(
-    res_json_path: Path, res_md_path: Path, res_docx_path: Path
+    res_json_path: Path,
+    res_md_path: Path,
+    res_docx_path: Path,
+    required_sections: list[str] | None = None,
 ) -> dict[str, Any]:
     """从产物文件计算论文结构指标。"""
     empty_sections: list[str] = []
+    missing_sections: list[str] = []
+    invalid_sections: list[str] = []
     ref_count = 0
     in_text_cite_count = 0
     alt_is_filename_ratio = 0.0
 
+    res_data: dict[str, Any] = {}
     if res_json_path.exists():
         try:
             res_data = json.loads(res_json_path.read_text(encoding="utf-8"))
@@ -295,8 +338,17 @@ def compute_paper_structure(
                     empty_sections.append(key)
                 elif not content:
                     empty_sections.append(key)
+                elif _is_invalid_section_content(str(content)):
+                    invalid_sections.append(key)
         except (json.JSONDecodeError, OSError):
-            pass
+            res_data = {}
+
+    missing_sections = [
+        section for section in (required_sections or []) if section not in res_data
+    ]
+    incomplete_sections = sorted(
+        set(empty_sections) | set(missing_sections) | set(invalid_sections)
+    )
 
     if res_md_path.exists():
         md_text = res_md_path.read_text(encoding="utf-8")
@@ -320,12 +372,29 @@ def compute_paper_structure(
 
     return {
         "empty_sections": empty_sections,
-        "empty_section_count": len(empty_sections),
+        "missing_sections": missing_sections,
+        "invalid_sections": invalid_sections,
+        "incomplete_sections": incomplete_sections,
+        "empty_section_count": len(incomplete_sections),
         "ref_count": ref_count,
         "in_text_cite_count": in_text_cite_count,
         "alt_is_filename_ratio": alt_is_filename_ratio,
         **docx_info,
     }
+
+
+def _is_invalid_section_content(content: str) -> bool:
+    """识别只描述执行失败、不能视为论文正文的占位内容。"""
+    normalized = " ".join(content.lower().split())
+    markers = (
+        "本阶段未完成",
+        "本节未能生成完整正文",
+        "任务失败",
+        "搜索文献失败",
+        "阶段结果不可用",
+        "unavailable",
+    )
+    return any(marker.lower() in normalized for marker in markers)
 
 
 # ---- 基线回归检测 ----
@@ -350,53 +419,63 @@ def check_regression(scorecard: dict, baseline: dict) -> dict[str, Any]:
         for phase, count in png_per.items():
             if phase.startswith("ques"):
                 ok = count >= threshold
-                checks.append({
-                    "metric": f"min_png_per_ques.{phase}",
-                    "value": count,
-                    "threshold": f">= {threshold}",
-                    "pass": ok,
-                })
+                checks.append(
+                    {
+                        "metric": f"min_png_per_ques.{phase}",
+                        "value": count,
+                        "threshold": f">= {threshold}",
+                        "pass": ok,
+                    }
+                )
 
     if "max_execute_error_rate" in baseline:
         actual = scorecard.get("agent_quality", {}).get("execute_error_rate", 0)
         threshold = baseline["max_execute_error_rate"]
-        checks.append({
-            "metric": "max_execute_error_rate",
-            "value": actual,
-            "threshold": f"<= {threshold}",
-            "pass": actual <= threshold,
-        })
+        checks.append(
+            {
+                "metric": "max_execute_error_rate",
+                "value": actual,
+                "threshold": f"<= {threshold}",
+                "pass": actual <= threshold,
+            }
+        )
 
     if "max_empty_sections" in baseline:
         actual = scorecard.get("paper_structure", {}).get("empty_section_count", 0)
         threshold = baseline["max_empty_sections"]
-        checks.append({
-            "metric": "max_empty_sections",
-            "value": actual,
-            "threshold": f"<= {threshold}",
-            "pass": actual <= threshold,
-        })
+        checks.append(
+            {
+                "metric": "max_empty_sections",
+                "value": actual,
+                "threshold": f"<= {threshold}",
+                "pass": actual <= threshold,
+            }
+        )
 
     if "min_image_coverage" in baseline:
         actual = scorecard.get("figure_quality", {}).get("image_coverage", 0)
         threshold = baseline["min_image_coverage"]
-        checks.append({
-            "metric": "min_image_coverage",
-            "value": actual,
-            "threshold": f">= {threshold}",
-            "pass": actual >= threshold,
-        })
+        checks.append(
+            {
+                "metric": "min_image_coverage",
+                "value": actual,
+                "threshold": f">= {threshold}",
+                "pass": actual >= threshold,
+            }
+        )
 
     if "must_call_tools" in baseline:
         tool_counts = scorecard.get("agent_quality", {}).get("tool_calls_by_name", {})
         for tool_name in baseline["must_call_tools"]:
             called = tool_name in tool_counts
-            checks.append({
-                "metric": f"must_call_tools.{tool_name}",
-                "value": "called" if called else "missing",
-                "threshold": "called",
-                "pass": called,
-            })
+            checks.append(
+                {
+                    "metric": f"must_call_tools.{tool_name}",
+                    "value": "called" if called else "missing",
+                    "threshold": "called",
+                    "pass": called,
+                }
+            )
 
     all_pass = all(c["pass"] for c in checks) if checks else None
     return {
@@ -413,20 +492,34 @@ def build_scorecard(task_id: str, baseline_path: str | None = None) -> dict[str,
     work_dir = WORK_DIR_ROOT / task_id
     events = load_trace(task_id)
     if not events:
-        print(f"[eval] 无 trace 事件，仅基于产物输出", file=sys.stderr)
+        print("[eval] 无 trace 事件，仅基于产物输出", file=sys.stderr)
+
+    baseline = load_baseline(baseline_path) if baseline_path else {}
+    required_phases = baseline.get("required_solution_phases", [])
+    question_phases = [
+        phase for phase in required_phases if str(phase).startswith("ques")
+    ]
+    required_sections = baseline.get("required_paper_sections", [])
 
     scorecard: dict[str, Any] = {
         "task_id": task_id,
-        "agent_quality": compute_agent_quality(events),
+        "agent_quality": compute_agent_quality(events, required_phases),
         "llm_metrics": compute_llm_metrics(events),
-        "figure_quality": compute_figure_quality(events, work_dir, work_dir / "res.md"),
+        "figure_quality": compute_figure_quality(
+            events,
+            work_dir,
+            work_dir / "res.md",
+            expected_question_phases=question_phases,
+        ),
         "paper_structure": compute_paper_structure(
-            work_dir / "res.json", work_dir / "res.md", work_dir / "res.docx"
+            work_dir / "res.json",
+            work_dir / "res.md",
+            work_dir / "res.docx",
+            required_sections=required_sections,
         ),
     }
 
     if baseline_path:
-        baseline = load_baseline(baseline_path)
         scorecard["regression_check"] = check_regression(scorecard, baseline)
 
     return scorecard
@@ -455,7 +548,23 @@ def load_scorecard(task_id: str) -> dict[str, Any] | None:
 def _flatten_metrics(scorecard: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     """将 scorecard 中可比较的标量指标展平为 metric_path -> value。"""
     flat: dict[str, Any] = {}
-    skip_keys = {"by_agent", "by_model", "turns_per_phase", "png_per_phase", "tool_calls_by_name", "empty_sections", "checks"}
+    skip_keys = {
+        "by_agent",
+        "by_model",
+        "turns_per_phase",
+        "png_per_phase",
+        "tool_calls_by_name",
+        "phase_statuses",
+        "started_phases",
+        "missing_phase_ends",
+        "missing_subtask_summaries",
+        "degraded_phases",
+        "empty_sections",
+        "missing_sections",
+        "invalid_sections",
+        "incomplete_sections",
+        "checks",
+    }
 
     for key, value in scorecard.items():
         if key in ("task_id", "regression_check", "scorecard_compare"):
@@ -493,7 +602,11 @@ def compare_scorecards(
         }
         if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
             entry["delta"] = round(new_val - old_val, 3)
-            entry["improved"] = new_val > old_val if key.endswith("_coverage") or key.endswith("_count") and "empty" not in key and "error" not in key else new_val < old_val
+            direction = _metric_direction(key)
+            if direction == "higher":
+                entry["improved"] = new_val > old_val
+            elif direction == "lower":
+                entry["improved"] = new_val < old_val
         diffs.append(entry)
 
     return {
@@ -501,6 +614,37 @@ def compare_scorecards(
         "new_task_id": new_scorecard.get("task_id"),
         "diffs": diffs,
     }
+
+
+def _metric_direction(metric: str) -> str | None:
+    """返回已知标量指标的改进方向，未知指标不猜测。"""
+    lower_markers = (
+        "error",
+        "fail",
+        "missing",
+        "empty",
+        "invalid",
+        "degraded",
+        "retry",
+        "blocked",
+        "duplicate",
+        "latency",
+        "tokens",
+        "llm_call_count",
+    )
+    higher_markers = (
+        "coverage",
+        "docx_exists",
+        "docx_has_images",
+        "docx_has_math",
+        "ref_count",
+        "in_text_cite_count",
+    )
+    if any(marker in metric for marker in lower_markers):
+        return "lower"
+    if any(marker in metric for marker in higher_markers):
+        return "higher"
+    return None
 
 
 # ---- 主入口 ----
@@ -533,7 +677,9 @@ def main() -> None:
     if args.compare:
         old_scorecard = load_scorecard(args.compare)
         if old_scorecard:
-            scorecard["scorecard_compare"] = compare_scorecards(scorecard, old_scorecard)
+            scorecard["scorecard_compare"] = compare_scorecards(
+                scorecard, old_scorecard
+            )
 
     if args.save_scorecard:
         save_scorecard(scorecard, task_id)

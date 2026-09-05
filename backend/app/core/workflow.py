@@ -194,6 +194,7 @@ class MathModelWorkFlow(WorkFlow):
             task_id=self.task_id,
             email=settings.OPENALEX_EMAIL,
             api_key=settings.OPENALEX_API_KEY,
+            timeout_seconds=settings.OPENALEX_TIMEOUT_SECONDS,
         )
 
         await redis_manager.publish_message(
@@ -234,6 +235,8 @@ class MathModelWorkFlow(WorkFlow):
             scholar=scholar,
             context_window=settings.WRITER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
+            max_tool_rounds=settings.WRITER_MAX_TOOL_ROUNDS,
+            max_search_calls=settings.WRITER_MAX_SEARCH_CALLS,
         )
         await trace_recorder.emit(
             self.task_id,
@@ -266,19 +269,26 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"代码手开始求解{key}"),
             )
 
-            phase_success = True
+            phase_status = "success"
             try:
                 coder_response = await coder_agent.run(
                     prompt=value["coder_prompt"], subtask_title=key
                 )
             except Exception:
-                phase_success = False
+                phase_status = "failed"
                 raise
 
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"代码手求解成功{key}", type="success"),
-            )
+            if coder_response.status == "partial":
+                phase_status = "degraded"
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"代码手部分完成{key}", type="warning"),
+                )
+            else:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"代码手求解成功{key}", type="success"),
+                )
 
             writer_prompt = flows.get_writer_prompt(
                 key,
@@ -286,6 +296,14 @@ class MathModelWorkFlow(WorkFlow):
                 code_interpreter,
                 config_template,
             )
+            if coder_response.status == "partial":
+                writer_prompt += (
+                    "\n本阶段状态为 partial。只能使用下列已验证材料撰写，"
+                    "不得引用执行错误、未验证推断或把阶段描述为完全收敛。\n"
+                    f"已验证指标：{coder_response.verified_metrics}\n"
+                    f"已验证产物：{coder_response.created_artifacts}\n"
+                    f"限制：{coder_response.limitations}\n"
+                )
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -298,6 +316,8 @@ class MathModelWorkFlow(WorkFlow):
                 available_images=coder_response.created_images,
                 sub_title=key,
             )
+            if writer_response.status != "success":
+                phase_status = "degraded"
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -310,7 +330,8 @@ class MathModelWorkFlow(WorkFlow):
                 self.task_id,
                 "phase.end",
                 phase=key,
-                success=phase_success,
+                success=phase_status == "success",
+                status=phase_status,
                 duration_ms=int((time.monotonic() - phase_started) * 1000),
             )
             set_trace_phase(None)
@@ -346,12 +367,15 @@ class MathModelWorkFlow(WorkFlow):
 
             user_output.set_res(key, writer_response)
 
+            phase_status = writer_response.status
+
             await trace_recorder.emit(
                 self.task_id,
                 "phase.end",
                 phase=key,
                 stage="write",
-                success=True,
+                success=phase_status == "success",
+                status=phase_status,
                 duration_ms=int((time.monotonic() - phase_started) * 1000),
             )
             set_trace_phase(None)

@@ -161,7 +161,10 @@ def test_modeler_stage_stops_after_one_failed_repair():
 
     with pytest.raises(ModelerStageError, match="after 2 attempts") as exc_info:
         asyncio.run(
-            ModelerWorkflow(ModelerAgent(client), tracer=tracer).create_plan(_problem())
+            ModelerWorkflow(
+                ModelerAgent(client, max_repair_attempts=1),
+                tracer=tracer,
+            ).create_plan(_problem())
         )
 
     assert isinstance(exc_info.value.__cause__, ModelerResponseError)

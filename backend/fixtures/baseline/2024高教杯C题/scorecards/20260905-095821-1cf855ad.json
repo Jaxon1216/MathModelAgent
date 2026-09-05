@@ -1,0 +1,373 @@
+{
+  "task_id": "20260905-095821-1cf855ad",
+  "agent_quality": {
+    "execute_error_rate": 0.079,
+    "execute_ok": 70,
+    "execute_err": 6,
+    "react_retry_total": 6,
+    "completion_blocked": 0,
+    "phase_fail": 0,
+    "turns_per_phase": {
+      "eda": 32,
+      "ques2": 15,
+      "ques3": 8,
+      "sensitivity_analysis": 7
+    },
+    "tool_calls_by_name": {
+      "execute_code": 76
+    }
+  },
+  "llm_metrics": {
+    "llm_call_count": 101,
+    "total_prompt_tokens": 8165493,
+    "total_completion_tokens": 173917,
+    "total_tokens": 8339410,
+    "total_cache_read_tokens": 8014336,
+    "total_reasoning_tokens": 108300,
+    "total_latency_ms": 2299879,
+    "by_agent": {
+      "CoordinatorAgent": {
+        "calls": 1,
+        "tokens": 2404,
+        "latency_ms": 17766
+      },
+      "ModelerAgent": {
+        "calls": 1,
+        "tokens": 11048,
+        "latency_ms": 156742
+      },
+      "CoderAgent": {
+        "calls": 84,
+        "tokens": 7634116,
+        "latency_ms": 1658896
+      },
+      "WriterAgent": {
+        "calls": 15,
+        "tokens": 691842,
+        "latency_ms": 466475
+      }
+    },
+    "by_model": {
+      "deepseek-v4-pro": {
+        "calls": 101,
+        "tokens": 8339410
+      }
+    }
+  },
+  "figure_quality": {
+    "png_per_phase": {
+      "eda": 3,
+      "ques2": 4,
+      "ques3": 2,
+      "sensitivity_analysis": 2
+    },
+    "png_total_from_trace": 11,
+    "png_in_work_dir": 11,
+    "image_coverage": 0.818,
+    "md_image_refs": 9,
+    "duplicate_png_names": 0
+  },
+  "paper_structure": {
+    "empty_sections": [
+      "ques3"
+    ],
+    "empty_section_count": 1,
+    "ref_count": 2,
+    "in_text_cite_count": 8,
+    "alt_is_filename_ratio": 0.0,
+    "docx_exists": true,
+    "docx_has_images": true,
+    "docx_has_math": true,
+    "docx_paragraph_count": 109
+  },
+  "regression_check": {
+    "all_pass": false,
+    "checks": [
+      {
+        "metric": "min_png_per_ques.ques2",
+        "value": 4,
+        "threshold": ">= 2",
+        "pass": true
+      },
+      {
+        "metric": "min_png_per_ques.ques3",
+        "value": 2,
+        "threshold": ">= 2",
+        "pass": true
+      },
+      {
+        "metric": "max_execute_error_rate",
+        "value": 0.079,
+        "threshold": "<= 0.15",
+        "pass": true
+      },
+      {
+        "metric": "max_empty_sections",
+        "value": 1,
+        "threshold": "<= 0",
+        "pass": false
+      },
+      {
+        "metric": "min_image_coverage",
+        "value": 0.818,
+        "threshold": ">= 0.8",
+        "pass": true
+      },
+      {
+        "metric": "must_call_tools.execute_code",
+        "value": "called",
+        "threshold": "called",
+        "pass": true
+      }
+    ]
+  },
+  "scorecard_compare": {
+    "old_task_id": "20260812-163504-32b726a1",
+    "new_task_id": "20260905-095821-1cf855ad",
+    "diffs": [
+      {
+        "metric": "agent_quality.execute_err",
+        "old": 11,
+        "new": 6,
+        "delta": -5,
+        "improved": true
+      },
+      {
+        "metric": "agent_quality.execute_error_rate",
+        "old": 0.117,
+        "new": 0.079,
+        "delta": -0.038,
+        "improved": true
+      },
+      {
+        "metric": "agent_quality.execute_ok",
+        "old": 83,
+        "new": 70,
+        "delta": -13,
+        "improved": true
+      },
+      {
+        "metric": "agent_quality.react_retry_total",
+        "old": 11,
+        "new": 6,
+        "delta": -5,
+        "improved": true
+      },
+      {
+        "metric": "agent_quality.tool_calls_by_name",
+        "old": {
+          "execute_code": 94
+        },
+        "new": {
+          "execute_code": 76
+        }
+      },
+      {
+        "metric": "agent_quality.turns_per_phase",
+        "old": {
+          "eda": 24,
+          "ques1": 48,
+          "ques2": 12,
+          "ques3": 10,
+          "sensitivity_analysis": 10
+        },
+        "new": {
+          "eda": 32,
+          "ques2": 15,
+          "ques3": 8,
+          "sensitivity_analysis": 7
+        }
+      },
+      {
+        "metric": "figure_quality.image_coverage",
+        "old": 1.0,
+        "new": 0.818,
+        "delta": -0.182,
+        "improved": false
+      },
+      {
+        "metric": "figure_quality.md_image_refs",
+        "old": 15,
+        "new": 9,
+        "delta": -6,
+        "improved": true
+      },
+      {
+        "metric": "figure_quality.png_in_work_dir",
+        "old": 15,
+        "new": 11,
+        "delta": -4,
+        "improved": true
+      },
+      {
+        "metric": "figure_quality.png_per_phase",
+        "old": {
+          "eda": 0,
+          "ques1": 4,
+          "ques2": 4,
+          "ques3": 4,
+          "sensitivity_analysis": 3
+        },
+        "new": {
+          "eda": 3,
+          "ques2": 4,
+          "ques3": 2,
+          "sensitivity_analysis": 2
+        }
+      },
+      {
+        "metric": "figure_quality.png_total_from_trace",
+        "old": 15,
+        "new": 11,
+        "delta": -4,
+        "improved": true
+      },
+      {
+        "metric": "llm_metrics.by_agent",
+        "old": {
+          "CoordinatorAgent": {
+            "calls": 1,
+            "tokens": 4605,
+            "latency_ms": 25873
+          },
+          "ModelerAgent": {
+            "calls": 1,
+            "tokens": 17772,
+            "latency_ms": 142554
+          },
+          "CoderAgent": {
+            "calls": 104,
+            "tokens": 14484831,
+            "latency_ms": 2554358
+          },
+          "WriterAgent": {
+            "calls": 12,
+            "tokens": 385866,
+            "latency_ms": 344578
+          }
+        },
+        "new": {
+          "CoordinatorAgent": {
+            "calls": 1,
+            "tokens": 2404,
+            "latency_ms": 17766
+          },
+          "ModelerAgent": {
+            "calls": 1,
+            "tokens": 11048,
+            "latency_ms": 156742
+          },
+          "CoderAgent": {
+            "calls": 84,
+            "tokens": 7634116,
+            "latency_ms": 1658896
+          },
+          "WriterAgent": {
+            "calls": 15,
+            "tokens": 691842,
+            "latency_ms": 466475
+          }
+        }
+      },
+      {
+        "metric": "llm_metrics.by_model",
+        "old": {
+          "deepseek-v4-flash": {
+            "calls": 118,
+            "tokens": 14893074
+          }
+        },
+        "new": {
+          "deepseek-v4-pro": {
+            "calls": 101,
+            "tokens": 8339410
+          }
+        }
+      },
+      {
+        "metric": "llm_metrics.llm_call_count",
+        "old": 118,
+        "new": 101,
+        "delta": -17,
+        "improved": false
+      },
+      {
+        "metric": "llm_metrics.total_cache_read_tokens",
+        "old": 14487808,
+        "new": 8014336,
+        "delta": -6473472,
+        "improved": true
+      },
+      {
+        "metric": "llm_metrics.total_completion_tokens",
+        "old": 250029,
+        "new": 173917,
+        "delta": -76112,
+        "improved": true
+      },
+      {
+        "metric": "llm_metrics.total_latency_ms",
+        "old": 3067363,
+        "new": 2299879,
+        "delta": -767484,
+        "improved": true
+      },
+      {
+        "metric": "llm_metrics.total_prompt_tokens",
+        "old": 14643045,
+        "new": 8165493,
+        "delta": -6477552,
+        "improved": true
+      },
+      {
+        "metric": "llm_metrics.total_reasoning_tokens",
+        "old": 122140,
+        "new": 108300,
+        "delta": -13840,
+        "improved": true
+      },
+      {
+        "metric": "llm_metrics.total_tokens",
+        "old": 14893074,
+        "new": 8339410,
+        "delta": -6553664,
+        "improved": true
+      },
+      {
+        "metric": "paper_structure.docx_paragraph_count",
+        "old": 112,
+        "new": 109,
+        "delta": -3,
+        "improved": false
+      },
+      {
+        "metric": "paper_structure.empty_section_count",
+        "old": 0,
+        "new": 1,
+        "delta": 1,
+        "improved": false
+      },
+      {
+        "metric": "paper_structure.empty_sections",
+        "old": [],
+        "new": [
+          "ques3"
+        ]
+      },
+      {
+        "metric": "paper_structure.in_text_cite_count",
+        "old": 0,
+        "new": 8,
+        "delta": 8,
+        "improved": true
+      },
+      {
+        "metric": "paper_structure.ref_count",
+        "old": 0,
+        "new": 2,
+        "delta": 2,
+        "improved": true
+      }
+    ]
+  }
+}

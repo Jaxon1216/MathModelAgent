@@ -10,6 +10,7 @@ import uuid
 
 class UserOutput:
     """管理建模任务的输出结果，处理引用编号、脚注和最终论文拼接。"""
+
     def __init__(
         self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None
     ):
@@ -56,8 +57,13 @@ class UserOutput:
             writer_response: 写作手的响应对象。
         """
         self.res[key] = {
+            "status": writer_response.status,
             "response_content": writer_response.response_content,
             "footnotes": writer_response.footnotes,
+            "references": [
+                reference.model_dump() for reference in writer_response.references
+            ],
+            "limitations": writer_response.limitations,
         }
 
     def get_res(self):
@@ -67,7 +73,7 @@ class UserOutput:
     def get_model_build_solve(self) -> str:
         """获取模型求解结果的摘要字符串。"""
         model_build_solve = ",".join(
-            f"{key}-{value}"
+            f"{key}-{value.get('response_content', '')}"
             for key, value in self.res.items()
             if key.startswith("ques") and key != "ques_count"
         )
@@ -121,6 +127,51 @@ class UserOutput:
 
         return text
 
+    def replace_verified_references_with_uuid(
+        self,
+        text: str,
+        references: list[dict],
+    ) -> str:
+        """把 Writer 的白名单引用标记替换为内部 UUID。"""
+        references_by_key = {
+            reference.get("key"): reference
+            for reference in references
+            if reference.get("key") and reference.get("openalex_id")
+        }
+
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            reference = references_by_key.get(key)
+            if reference is None:
+                return ""
+            source_id = reference["openalex_id"]
+            existing_uuid = next(
+                (
+                    uid
+                    for uid, item in self.footnotes.items()
+                    if item.get("source_id") == source_id
+                ),
+                None,
+            )
+            if existing_uuid is None:
+                existing_uuid = str(uuid.uuid4())
+                self.footnotes[existing_uuid] = {
+                    "content": reference["canonical_citation"],
+                    "source_id": source_id,
+                }
+            return f"[{existing_uuid}]"
+
+        return re.sub(r"\[\[REF:(R\d+)\]\]", replace, text)
+
+    @staticmethod
+    def strip_model_bibliography(text: str) -> str:
+        """移除章节末尾由模型自行排版的参考文献块。"""
+        return re.sub(
+            r"(?ms)^\s*#{1,6}\s*参考文献\s*$.*\Z",
+            "",
+            text,
+        ).rstrip()
+
     def sort_text_with_footnotes(self, replace_res: dict) -> dict:
         """按章节顺序排列文本并将 UUID 替换为连续编号。
 
@@ -136,13 +187,14 @@ class UserOutput:
         for seq_key in self.seq:
             text = replace_res[seq_key]["response_content"]
             # 找到[uuid]
-            uuid_list = re.findall(r"\[([a-f0-9-]{36})\]", text)
+            uuid_list = dict.fromkeys(re.findall(r"\[([a-f0-9-]{36})\]", text))
             for uid in uuid_list:
-                text = text.replace(f"[{uid}]", f"[^{ref_index}]")
                 if self.footnotes[uid].get("number") is None:
                     self.footnotes[uid]["number"] = ref_index
+                    ref_index += 1
 
-                ref_index += 1
+                number = self.footnotes[uid]["number"]
+                text = text.replace(f"[{uid}]", f"[^{number}]")
             sort_res[seq_key] = {
                 "response_content": text,
             }
@@ -167,10 +219,16 @@ class UserOutput:
 
     def get_result_to_save(self) -> str:
         """获取最终拼接的论文全文，包含引用处理和参考文献。"""
+        self.footnotes = {}
         replace_res = {}
 
         for key, value in self.res.items():
-            new_text = self.replace_references_with_uuid(value["response_content"])
+            section_text = self.strip_model_bibliography(value["response_content"])
+            new_text = self.replace_verified_references_with_uuid(
+                section_text,
+                value.get("references") or [],
+            )
+            new_text = self.replace_references_with_uuid(new_text)
             replace_res[key] = {
                 "response_content": new_text,
             }

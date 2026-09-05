@@ -15,23 +15,23 @@ from scripts.smoke_modeler import (
 
 
 def test_modeler_repair_attempts_setting_is_user_configurable(monkeypatch):
-    """环境配置允许 0-3 次格式修复，默认保持一次。"""
+    """环境配置接受任意非负修复次数，默认保持三次。"""
     monkeypatch.delenv("MODELER_MAX_REPAIR_ATTEMPTS", raising=False)
-    assert (
-        Settings(_env_file=None).MODELER_MAX_REPAIR_ATTEMPTS  # type: ignore[call-arg]
-        == 1
-    )
-
-    monkeypatch.setenv("MODELER_MAX_REPAIR_ATTEMPTS", "3")
     assert (
         Settings(_env_file=None).MODELER_MAX_REPAIR_ATTEMPTS  # type: ignore[call-arg]
         == 3
     )
 
+    monkeypatch.setenv("MODELER_MAX_REPAIR_ATTEMPTS", "4")
+    assert (
+        Settings(_env_file=None).MODELER_MAX_REPAIR_ATTEMPTS  # type: ignore[call-arg]
+        == 4
+    )
+
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,  # type: ignore[call-arg]
-            MODELER_MAX_REPAIR_ATTEMPTS=4,
+            MODELER_MAX_REPAIR_ATTEMPTS=-1,
         )
 
 

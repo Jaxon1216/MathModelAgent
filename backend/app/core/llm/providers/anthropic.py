@@ -47,11 +47,13 @@ class AnthropicProvider(BaseProvider):
             if block.type == "text":
                 content_parts.append(block.text)
             elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=_json.dumps(block.input),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=_json.dumps(block.input),
+                    )
+                )
 
         content = "".join(content_parts) if content_parts else None
 
@@ -83,24 +85,35 @@ class AnthropicProvider(BaseProvider):
                 if msg.get("content"):
                     content_blocks.append({"type": "text", "text": msg["content"]})
                 for tc in msg["tool_calls"]:
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["function"]["name"],
-                        "input": _json.loads(tc["function"]["arguments"]),
-                    })
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["function"]["name"],
+                            "input": _json.loads(tc["function"]["arguments"]),
+                        }
+                    )
                 converted.append({"role": "assistant", "content": content_blocks})
                 continue
 
             if role == "tool":
-                converted.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": msg.get("tool_call_id", ""),
-                        "content": msg.get("content", ""),
-                    }],
-                })
+                tool_result = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": msg.get("content", ""),
+                }
+                if (
+                    converted
+                    and converted[-1].get("role") == "user"
+                    and isinstance(converted[-1].get("content"), list)
+                    and all(
+                        block.get("type") == "tool_result"
+                        for block in converted[-1]["content"]
+                    )
+                ):
+                    converted[-1]["content"].append(tool_result)
+                else:
+                    converted.append({"role": "user", "content": [tool_result]})
                 continue
 
             converted.append(msg)
@@ -113,11 +126,13 @@ class AnthropicProvider(BaseProvider):
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool["function"]
-                converted.append({
-                    "name": func["name"],
-                    "description": func.get("description", ""),
-                    "input_schema": func.get("parameters", {}),
-                })
+                converted.append(
+                    {
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {}),
+                    }
+                )
         return converted
 
     def _convert_tool_choice(self, tool_choice: str) -> dict:

@@ -1,26 +1,37 @@
 """OpenAlex 学术文献搜索模块。"""
 
-import requests
-from typing import List, Dict, Any
+from typing import Any
+
+import httpx
+
 from app.services.redis_manager import redis_manager
 from app.schemas.response import ScholarMessage
+from app.utils.log_util import logger
 
 
 class OpenAlexScholar:
     """OpenAlex 学术文献搜索客户端。"""
 
-    def __init__(self, task_id: str, email: str | None = None, api_key: str | None = None):
+    def __init__(
+        self,
+        task_id: str,
+        email: str | None = None,
+        api_key: str | None = None,
+        timeout_seconds: float = 15.0,
+    ) -> None:
         """初始化 OpenAlex 客户端。
 
         Args:
             task_id: 任务 ID。
             email: 可选的邮箱地址，用于获取更好的 API 服务。
             api_key: 可选的 OpenAlex API Key。
+            timeout_seconds: 单次 HTTP 请求总超时秒数。
         """
         self.base_url = "https://api.openalex.org"
         self.email = email
         self.api_key = api_key
         self.task_id = task_id
+        self.timeout_seconds = timeout_seconds
 
     def _get_request_url(self, endpoint: str) -> str:
         """构建请求 URL。
@@ -32,7 +43,7 @@ class OpenAlexScholar:
             endpoint = endpoint[1:]
         return f"{self.base_url}/{endpoint}"
 
-    def _get_abstract_from_index(self, abstract_inverted_index: Dict) -> str:
+    def _get_abstract_from_index(self, abstract_inverted_index: dict) -> str:
         """从abstract_inverted_index中重建摘要文本
 
         Args:
@@ -60,7 +71,7 @@ class OpenAlexScholar:
         # 拼接单词形成文本
         return " ".join(words).strip()
 
-    async def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
+    async def search_papers(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         """使用 OpenAlex API 搜索学术论文。
 
         Args:
@@ -95,26 +106,23 @@ class OpenAlexScholar:
             else "OpenAlexScholar/1.0"
         }
 
-        # 让 requests 处理参数编码和 URL 构建
-        response: requests.Response | None = None
+        response: httpx.Response | None = None
         try:
-            print(f"请求 URL: {base_url} 参数: {params}")
-            response = requests.get(base_url, params=params, headers=headers)
-            print(f"响应状态: {response.status_code}")
-
+            logger.info(f"请求 OpenAlex: {base_url}")
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.get(base_url, params=params, headers=headers)
+            logger.info(f"OpenAlex 响应状态: {response.status_code}")
             response.raise_for_status()
             results = response.json()
-        except requests.exceptions.HTTPError as e:
-            print(f"HTTP 错误: {e}")
+        except httpx.HTTPStatusError as exc:
+            logger.error(f"OpenAlex HTTP 错误: {exc}")
             if response is not None and response.status_code == 403:
-                print(
+                logger.error(
                     "提示: 403错误通常意味着您需要提供有效的邮箱地址或者遵循礼貌池（polite pool）规则"
                 )
-            if response is not None and hasattr(response, "text"):
-                print(f"响应内容: {response.text}")
             raise
-        except Exception as e:
-            print(f"请求出错: {e}")
+        except httpx.HTTPError as exc:
+            logger.error(f"OpenAlex 请求失败: {type(exc).__name__}")
             raise
 
         papers = []
@@ -151,6 +159,7 @@ class OpenAlexScholar:
             }
 
             paper = {
+                "openalex_id": work.get("id", ""),
                 "title": work.get("display_name") or work.get("title", ""),
                 "abstract": abstract,
                 "authors": authors,
@@ -174,7 +183,7 @@ class OpenAlexScholar:
 
         return papers
 
-    def papers_to_str(self, papers: List[Dict[str, Any]]) -> str:
+    def papers_to_str(self, papers: list[dict[str, Any]]) -> str:
         """将文献列表转换为可读字符串。"""
         result = ""
         for paper in papers:
@@ -190,7 +199,7 @@ class OpenAlexScholar:
             result += "=" * 80
         return result
 
-    def _format_citation(self, work: Dict[str, Any]) -> str:
+    def _format_citation(self, work: dict[str, Any]) -> str:
         """将论文数据格式化为引用字符串。"""
         # 获取所有作者
         authors = [
