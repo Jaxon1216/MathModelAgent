@@ -87,6 +87,25 @@ Agent 步数。
 
 ## 后续阶段：M1.5 数据可靠性闭环
 
+### 实现状态（2026-09-05）
+
+- 经批准的 Tasks 1-9 已完成实现与本地验收。主工作流已按
+  `TaskFacts -> TaskOutline -> DataProfile -> CleaningPlan/DataIssue ->
+  DataContract -> QuestionPlan` 接入，旧 Coder 仅通过单一文本桥接消费冻结
+  cleaned 路径、验证字段和依赖声明。
+- Task 7 最终集成审查确认：问题 phase 使用 outline 的稳定拓扑顺序，EDA
+  只读消费冻结契约；未解决 issue、非法计划、取消或契约指纹漂移会阻断
+  Coder/Writer/最终发布，阶段 trace 保留唯一终态与稳定失败分类。
+- 唯一真实附件目录 `backend/app/example/example/2024高教杯C题/` 的离线
+  fake-LLM 测试通过：4 张输入 Sheet 均形成 profile、cleaned 产物和 frozen
+  contract，3 个 `result*.xlsx` 模板全部排除；源文件 SHA-256 与 mtime 不变，
+  `QuestionPlan` 覆盖 `ques1..ques3` 且兼容 flow 满足依赖顺序。
+- 本地验证为 `make test-m15`: 146 passed、`make check`: 203 passed,
+  1 skipped, 1 deselected，以及全量应用 Pyright 0 errors。上述证据不包含真实模型或完整
+  E2E；本轮未运行 `smoke-modeler`、`e2e-fixture`、`eval`，未生成 scorecard，
+  未修改 `experiment-log.md`。因此本记录只关闭 M1.5 实现任务，不改变既有
+  M1 E2E 结论，也不启动后续阶段。
+
 ### 前置条件与范围
 
 M1 的完成定义全部满足并有实验记录后才开始 M1.5。本阶段按

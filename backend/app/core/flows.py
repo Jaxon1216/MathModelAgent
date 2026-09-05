@@ -1,15 +1,31 @@
 """工作流程定义模块，管理建模任务的求解和写作流程。"""
 
+from app.domain.m15 import DataContract
 from app.models.user_output import UserOutput
+from app.orchestration.task_outline import TaskSchedule
 from app.schemas.A2A import ModelerToCoder
 from app.tools.base_interpreter import BaseCodeInterpreter
 
 
 class Flows:
     """管理数学建模任务的求解流程和写作流程。"""
-    def __init__(self, questions: dict[str, str | int]):
+
+    def __init__(
+        self,
+        questions: dict[str, str | int],
+        schedule: TaskSchedule | None = None,
+    ):
         self.flows: dict[str, dict] = {}
         self.questions: dict[str, str | int] = questions
+        self.schedule = schedule
+        if schedule is not None:
+            missing = [
+                question_id
+                for question_id in schedule.execution_order
+                if question_id not in questions
+            ]
+            if missing:
+                raise ValueError(f"TaskSchedule 包含缺失问题: {missing}")
 
     def set_flows(self, ques_count: int):
         """根据问题数量设置流程节点。
@@ -17,7 +33,7 @@ class Flows:
         Args:
             ques_count: 问题数量。
         """
-        ques_str = [f"ques{i}" for i in range(1, ques_count + 1)]
+        ques_str = self._question_order(ques_count)
         seq = [
             "firstPage",
             "RepeatQues",
@@ -32,7 +48,10 @@ class Flows:
         self.flows = {key: {} for key in seq}
 
     def get_solution_flows(
-        self, questions: dict[str, str | int], modeler_response: ModelerToCoder
+        self,
+        questions: dict[str, str | int],
+        modeler_response: ModelerToCoder,
+        data_contract: DataContract | None = None,
     ):
         """生成求解阶段的流程配置。
 
@@ -43,26 +62,24 @@ class Flows:
         Returns:
             求解流程配置字典，键为任务名，值包含 coder_prompt 等信息。
         """
-        questions_quesx = {
-            key: value
-            for key, value in questions.items()
-            if key.startswith("ques") and key != "ques_count"
-        }
+        question_order = self._question_order()
         solutions = modeler_response.questions_solution
         ques_flow = {
             key: {
                 "coder_prompt": f"""
                         参考建模手给出的解决方案{solutions.get(key, "")}
-                        完成如下问题{value}
+                        完成如下问题{questions[key]}
                     """,
             }
-            for key, value in questions_quesx.items()
+            for key in question_order
         }
         flows = {
             "eda": {
                 "coder_prompt": f"""
-                        参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
-                        对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
+                        数据契约：{_render_eda_contract(data_contract)}
+                        只读分析冻结契约声明的 cleaned 数据，完成数据分布、质量诊断和必要图表。
+                        严禁修改原始附件或 cleaned 文件，严禁承担数据清洗、填充、去重或类型转换。
+                        分析和图表输出可写入当前工作目录，**不需要复杂的模型**。
                     """,
             },
             **ques_flow,
@@ -147,13 +164,10 @@ class Flows:
 
     def get_questions_quesx(self) -> dict[str, str | int]:
         """获取问题1,2,3...的键值对"""
-        # 获取所有以 "ques" 开头的键值对
-        questions_quesx = {
-            key: value
-            for key, value in self.questions.items()
-            if key.startswith("ques") and key != "ques_count"
+        return {
+            question_id: self.questions[question_id]
+            for question_id in self._question_order()
         }
-        return questions_quesx
 
     def get_seq(self, ques_count: int) -> dict[str, str]:
         """获取论文章节顺序。
@@ -164,7 +178,7 @@ class Flows:
         Returns:
             以章节名为键的有序字典。
         """
-        ques_str = [f"ques{i}" for i in range(1, ques_count + 1)]
+        ques_str = self._question_order(ques_count)
         seq = [
             "firstPage",
             "RepeatQues",
@@ -177,3 +191,39 @@ class Flows:
             "judge",
         ]
         return {key: "" for key in seq}
+
+    def _question_order(self, ques_count: int | None = None) -> list[str]:
+        """优先使用依赖调度顺序，否则保留旧的连续编号顺序。"""
+        if self.schedule is not None:
+            return list(self.schedule.execution_order)
+        if ques_count is None:
+            raw_count = self.questions.get("ques_count")
+            if not isinstance(raw_count, int):
+                raise ValueError("缺少可用的 ques_count")
+            ques_count = raw_count
+        return [f"ques{i}" for i in range(1, ques_count + 1)]
+
+
+def _render_eda_contract(data_contract: DataContract | None) -> str:
+    """仅向 EDA 暴露冻结 cleaned 路径和已验证字段。"""
+    if data_contract is None:
+        return "调用方未提供冻结契约；不得执行数据清洗或修改数据文件。"
+    if data_contract.status == "no_data":
+        return (
+            f"artifact_id={data_contract.artifact_id}, status=no_data，"
+            "本任务没有可分析的数据表。"
+        )
+    tables = "；".join(
+        (
+            f"{table.table_id}: cleaned_path={table.cleaned_path!r}, "
+            "verified_columns="
+            + ", ".join(
+                f"{column.name}:{column.canonical_type}" for column in table.columns
+            )
+        )
+        for table in data_contract.tables
+    )
+    return (
+        f"artifact_id={data_contract.artifact_id}, status={data_contract.status}；"
+        f"{tables}"
+    )

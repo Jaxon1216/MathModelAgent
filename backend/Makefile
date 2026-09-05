@@ -1,4 +1,4 @@
-.PHONY: lint format test test-modeler smoke-modeler typecheck check eval e2e-fixture
+.PHONY: lint format test test-modeler test-m15 smoke-modeler typecheck check eval e2e-fixture
 
 lint:
 	uv run ruff check app/ tests/ scripts/smoke_modeler.py scripts/run_fixture.py
@@ -16,6 +16,22 @@ test-modeler:
 	  tests/unit/test_smoke_modeler.py \
 	  tests/integration/test_modeler.py \
 	  tests/integration/test_modeler_bridge.py \
+	  -m "not live_modeler" -v
+
+test-m15:
+	uv run pytest \
+	  tests/unit/test_m15_contracts.py \
+	  tests/unit/test_m15_artifact_store.py \
+	  tests/unit/test_task_outline.py \
+	  tests/unit/test_data_catalog.py \
+	  tests/unit/test_data_profiles.py \
+	  tests/unit/test_data_cleaning.py \
+	  tests/unit/test_data_contract.py \
+	  tests/unit/test_question_plan.py \
+	  tests/integration/test_task_outline_workflow.py \
+	  tests/integration/test_data_cleaning_workflow.py \
+	  tests/integration/test_m15_workflow.py \
+	  tests/integration/test_m15_fixture.py \
 	  -m "not live_modeler" -v
 
 smoke-modeler:

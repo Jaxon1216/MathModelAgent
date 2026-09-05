@@ -3,12 +3,15 @@
 import asyncio
 import time
 
+from app.agents.cleaning_planner import CleaningPlannerAgent
 from app.agents.modeler import ModelerAgent
 from app.core.agents.coder_agent import CoderAgent
 from app.core.agents.coordinator_agent import CoordinatorAgent
 from app.core.agents.writer_agent import WriterAgent
-from app.domain.problem import QuestionSet
-from app.orchestration.workflow import ModelerWorkflow
+from app.data.contracts import DataContractIntegrityError
+from app.domain.m15 import DataContract, TaskOutline
+from app.orchestration.m15_workflow import M15Workflow, validate_contract_boundary
+from app.orchestration.task_outline import TaskOutlineWorkflow
 from app.runtime.llm.client import LegacyLLMClient
 from app.runtime.tracing import LegacyStageTracer
 from app.schemas.A2A import ModelerToCoder
@@ -47,6 +50,8 @@ class MathModelWorkFlow(WorkFlow):
     work_dir: str  # worklow work dir
     ques_count: int = 0  # 问题数量
     questions: dict[str, str | int] = {}  # 问题
+    task_outline: TaskOutline | None = None
+    data_contract: DataContract | None = None
     cancel_event: asyncio.Event | None = None  # 取消信号
 
     async def _check_cancelled(self) -> None:
@@ -116,9 +121,17 @@ class MathModelWorkFlow(WorkFlow):
         await self._check_cancelled()
 
         try:
-            coordinator_response = await coordinator_agent.run(problem.ques_all)
-            self.questions = coordinator_response.questions
-            self.ques_count = coordinator_response.ques_count
+            outline_result = await TaskOutlineWorkflow(
+                coordinator_agent,
+                tracer=LegacyStageTracer(),
+            ).create_outline(
+                task_id=problem.task_id,
+                problem_text=problem.ques_all,
+                work_dir=self.work_dir,
+            )
+            self.task_outline = outline_result.outline
+            self.questions = outline_result.to_legacy_questions()
+            self.ques_count = outline_result.outline.ques_count
         except Exception as e:
             #  非数学建模问题
             logger.error(f"CoordinatorAgent 执行失败: {e}")
@@ -136,9 +149,22 @@ class MathModelWorkFlow(WorkFlow):
 
         await self._check_cancelled()
 
+        modeler_client = LegacyLLMClient(
+            modeler_llm,
+            cancel_event=self.cancel_event,
+        )
+        cleaning_planner = CleaningPlannerAgent(modeler_client)
         modeler_agent = ModelerAgent(
-            LegacyLLMClient(modeler_llm, cancel_event=self.cancel_event),
+            modeler_client,
             max_repair_attempts=settings.MODELER_MAX_REPAIR_ATTEMPTS,
+        )
+        await trace_recorder.emit(
+            self.task_id,
+            "agent.init",
+            agent="CleaningPlannerAgent",
+            agent_class="CleaningPlannerAgent",
+            model=modeler_llm.model,
+            context_window=settings.MODELER_CONTEXT_WINDOW,
         )
         await trace_recorder.emit(
             self.task_id,
@@ -149,23 +175,20 @@ class MathModelWorkFlow(WorkFlow):
             context_window=settings.MODELER_CONTEXT_WINDOW,
         )
 
-        modeler_result = await ModelerWorkflow(
+        m15_result = await M15Workflow(
+            cleaning_planner,
             modeler_agent,
             tracer=LegacyStageTracer(),
-        ).create_plan_from_work_dir(
+            cancel_check=self._check_cancelled,
+        ).run(
             task_id=problem.task_id,
-            question_set=QuestionSet.from_coordinator(
-                coordinator_response.questions,
-                coordinator_response.ques_count,
-            ),
             work_dir=self.work_dir,
+            task_facts=outline_result.task_facts,
+            outline=outline_result.outline,
         )
+        self.data_contract = m15_result.data_contract
         # 旧 Coder 尚未迁移；在唯一兼容边界将领域计划降级为原有文本交接。
-        modeler_response = ModelerToCoder(
-            questions_solution=modeler_result.plan.to_coder_handoff(
-                modeler_result.problem.data_catalog
-            )
-        )
+        modeler_response = ModelerToCoder(questions_solution=m15_result.coder_handoff)
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
@@ -247,11 +270,18 @@ class MathModelWorkFlow(WorkFlow):
             context_window=settings.WRITER_CONTEXT_WINDOW,
         )
 
-        flows = Flows(self.questions)
+        flows = Flows(self.questions, schedule=outline_result.schedule)
 
         ################################################ solution steps
-        solution_flows = flows.get_solution_flows(self.questions, modeler_response)
+        solution_flows = flows.get_solution_flows(
+            self.questions,
+            modeler_response,
+            self.data_contract,
+        )
         config_template = get_config_template(problem.comp_template)
+        contract = self.data_contract
+        assert contract is not None
+        stage_tracer = LegacyStageTracer()
 
         for key, value in solution_flows.items():
             await self._check_cancelled()
@@ -270,71 +300,112 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             phase_status = "success"
+            failure_kind: str | None = None
             try:
+                await validate_contract_boundary(
+                    task_id=self.task_id,
+                    work_dir=self.work_dir,
+                    contract=contract,
+                    phase=key,
+                    boundary="before",
+                    tracer=stage_tracer,
+                )
                 coder_response = await coder_agent.run(
                     prompt=value["coder_prompt"], subtask_title=key
                 )
+                await validate_contract_boundary(
+                    task_id=self.task_id,
+                    work_dir=self.work_dir,
+                    contract=contract,
+                    phase=key,
+                    boundary="after_coder",
+                    tracer=stage_tracer,
+                )
+
+                if coder_response.status == "partial":
+                    phase_status = "degraded"
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        SystemMessage(
+                            content=f"代码手部分完成{key}",
+                            type="warning",
+                        ),
+                    )
+                else:
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        SystemMessage(
+                            content=f"代码手求解成功{key}",
+                            type="success",
+                        ),
+                    )
+
+                writer_prompt = flows.get_writer_prompt(
+                    key,
+                    coder_response.code_response or "",
+                    code_interpreter,
+                    config_template,
+                )
+                if coder_response.status == "partial":
+                    writer_prompt += (
+                        "\n本阶段状态为 partial。只能使用下列已验证材料撰写，"
+                        "不得引用执行错误、未验证推断或把阶段描述为完全收敛。\n"
+                        f"已验证指标：{coder_response.verified_metrics}\n"
+                        f"已验证产物：{coder_response.created_artifacts}\n"
+                        f"限制：{coder_response.limitations}\n"
+                    )
+
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"论文手开始写{key}部分"),
+                )
+
+                ## TODO: 图片引用错误
+                writer_response = await writer_agent.run(
+                    writer_prompt,
+                    available_images=coder_response.created_images,
+                    sub_title=key,
+                )
+                if writer_response.status != "success":
+                    phase_status = "degraded"
+
+                await validate_contract_boundary(
+                    task_id=self.task_id,
+                    work_dir=self.work_dir,
+                    contract=contract,
+                    phase=key,
+                    boundary="after",
+                    tracer=stage_tracer,
+                )
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"论文手完成{key}部分"),
+                )
+
+                user_output.set_res(key, writer_response)
+            except asyncio.CancelledError:
+                phase_status = "failed"
+                failure_kind = "cancelled"
+                raise
+            except DataContractIntegrityError:
+                phase_status = "failed"
+                failure_kind = "integrity"
+                raise
             except Exception:
                 phase_status = "failed"
+                failure_kind = "provider"
                 raise
-
-            if coder_response.status == "partial":
-                phase_status = "degraded"
-                await redis_manager.publish_message(
+            finally:
+                await trace_recorder.emit(
                     self.task_id,
-                    SystemMessage(content=f"代码手部分完成{key}", type="warning"),
+                    "phase.end",
+                    phase=key,
+                    success=phase_status == "success",
+                    status=phase_status,
+                    duration_ms=int((time.monotonic() - phase_started) * 1000),
+                    failure_kind=failure_kind,
                 )
-            else:
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"代码手求解成功{key}", type="success"),
-                )
-
-            writer_prompt = flows.get_writer_prompt(
-                key,
-                coder_response.code_response or "",
-                code_interpreter,
-                config_template,
-            )
-            if coder_response.status == "partial":
-                writer_prompt += (
-                    "\n本阶段状态为 partial。只能使用下列已验证材料撰写，"
-                    "不得引用执行错误、未验证推断或把阶段描述为完全收敛。\n"
-                    f"已验证指标：{coder_response.verified_metrics}\n"
-                    f"已验证产物：{coder_response.created_artifacts}\n"
-                    f"限制：{coder_response.limitations}\n"
-                )
-
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"论文手开始写{key}部分"),
-            )
-
-            ## TODO: 图片引用错误
-            writer_response = await writer_agent.run(
-                writer_prompt,
-                available_images=coder_response.created_images,
-                sub_title=key,
-            )
-            if writer_response.status != "success":
-                phase_status = "degraded"
-
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"论文手完成{key}部分"),
-            )
-
-            user_output.set_res(key, writer_response)
-
-            await trace_recorder.emit(
-                self.task_id,
-                "phase.end",
-                phase=key,
-                success=phase_status == "success",
-                status=phase_status,
-                duration_ms=int((time.monotonic() - phase_started) * 1000),
-            )
-            set_trace_phase(None)
+                set_trace_phase(None)
 
         # 关闭沙盒
 
@@ -363,23 +434,61 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"论文手开始写{key}部分"),
             )
 
-            writer_response = await writer_agent.run(prompt=value, sub_title=key)
-
-            user_output.set_res(key, writer_response)
-
-            phase_status = writer_response.status
-
-            await trace_recorder.emit(
-                self.task_id,
-                "phase.end",
-                phase=key,
-                stage="write",
-                success=phase_status == "success",
-                status=phase_status,
-                duration_ms=int((time.monotonic() - phase_started) * 1000),
-            )
-            set_trace_phase(None)
+            phase_status = "success"
+            failure_kind = None
+            try:
+                await validate_contract_boundary(
+                    task_id=self.task_id,
+                    work_dir=self.work_dir,
+                    contract=contract,
+                    phase=key,
+                    boundary="before",
+                    tracer=stage_tracer,
+                )
+                writer_response = await writer_agent.run(prompt=value, sub_title=key)
+                user_output.set_res(key, writer_response)
+                phase_status = writer_response.status
+                await validate_contract_boundary(
+                    task_id=self.task_id,
+                    work_dir=self.work_dir,
+                    contract=contract,
+                    phase=key,
+                    boundary="after",
+                    tracer=stage_tracer,
+                )
+            except asyncio.CancelledError:
+                phase_status = "failed"
+                failure_kind = "cancelled"
+                raise
+            except DataContractIntegrityError:
+                phase_status = "failed"
+                failure_kind = "integrity"
+                raise
+            except Exception:
+                phase_status = "failed"
+                failure_kind = "provider"
+                raise
+            finally:
+                await trace_recorder.emit(
+                    self.task_id,
+                    "phase.end",
+                    phase=key,
+                    stage="write",
+                    success=phase_status == "success",
+                    status=phase_status,
+                    duration_ms=int((time.monotonic() - phase_started) * 1000),
+                    failure_kind=failure_kind,
+                )
+                set_trace_phase(None)
 
         logger.info(user_output.get_res())
 
+        await validate_contract_boundary(
+            task_id=self.task_id,
+            work_dir=self.work_dir,
+            contract=contract,
+            phase="publish",
+            boundary="before",
+            tracer=stage_tracer,
+        )
         user_output.save_result()
