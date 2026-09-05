@@ -98,7 +98,8 @@ class ModelerWorkflow:
                     table.table_id for table in problem.data_catalog.input_tables
                 ],
             )
-            plan = await self._agent.run(problem)
+            # 旧 M1 smoke/桥接测试保留该入口；主工作流使用 M1.5 编排。
+            plan = await self._agent.run_legacy(problem)
             success = True
             return ModelerStageResult(problem=problem, plan=plan)
         except asyncio.CancelledError:
