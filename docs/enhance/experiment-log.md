@@ -187,3 +187,76 @@
 - `regression_check.all_pass=false` 的唯一原因是 Q3 独立图片数为 0，低于原有
   `min_png_per_ques=2`。该项作为论文质量缺口保留，不阻止本轮完整交付，也不
   将 `partial/degraded` 自动升级为新的硬门禁。
+
+## 2026-09-05 - 固定 Fixture E2E（数据清洗 schema 失败）
+
+- task id：`20260905-195753-0d9d319b`；git revision：
+  `f03886c51ffce30f1e54e54a280f2cc15756a31f`，运行开始时工作树和 M1 source
+  均为 clean。
+- fixture：`fixtures/problems/2024高教杯C题.json`，SHA256
+  `832e9fa814a1b1b2d58ed28b53f1564abc2d8b6a38d9c398a0ed0e44b0c4c9b3`；
+  四个 Agent 均使用 `deepseek-v4-pro` / `openai-chat`，配置指纹
+  `a27d3affa9302ccd`。
+- 运行前护栏：`make test-modeler` 为 37 passed；`make check` 为
+  223 passed、1 skipped、1 deselected。
+- `task_facts`、`task_outline` 和 4 个输入 Sheet 的 `data_profile` 均已通过；
+  `task_outline` 正确声明 `ques3` 依赖 `ques2`。随后 `data_cleaning` 的首个
+  规划请求耗时 239,031 ms 后返回，确定性 schema 校验拒绝
+  `normalize-crop-catalog-keys`，原因是该操作只能规范化画像中声明的关联键。
+- 因此任务在 `data_cleaning/schema` 终止，未进入 Modeler 最终 QuestionPlan、
+  Coder、Writer 或 DOCX 导出；没有 `res.md`、`res.docx`、图片或
+  `execute_code` 调用。这是 M1.5 数据清洗规划与真实模型响应的兼容缺口，不是
+  Coder/Writer 退化。
+- scorecard：
+  `fixtures/baseline/2024高教杯C题/scorecards/20260905-195753-0d9d319b.json`；
+  trace：`logs/traces/20260905-195753-0d9d319b.jsonl`。与唯一质量基线
+  `20260812-163504-32b726a1` 的显式比较已写入 scorecard：
+  `phase_fail=1`、`empty_section_count=11`、`image_coverage=0`，故
+  `regression_check.all_pass=false`。M1 保持开启，后续修复仅应收口该
+  CleaningPlan 合法操作与真实 profile 的兼容性。
+
+## 2026-09-05 - 固定 Fixture E2E（清洗 Repair schema 失败）
+
+- task id：`20260905-212110-ecd33559`；git revision：
+  `f03886c51ffce30f1e54e54a280f2cc15756a31f`，工作树和 M1 source 均为 dirty，
+  包含 CleaningPlan scope 违规的有界重规划修复。fixture、模型配置和指纹与上一轮
+  相同：`2024高教杯C题`、四个 Agent `deepseek-v4-pro` / `openai-chat`、
+  配置指纹 `a27d3affa9302ccd`。
+- 运行前护栏：`make test-modeler` 为 37 passed；`make check` 为
+  224 passed、1 skipped、1 deselected。
+- 上一轮初始规划的 `normalize_join_key` scope 失败不再发生。初始 CleaningPlan
+  通过；4 张输入表中前 3 张各自产生已验证的 cleaned CSV。第 4 张
+  `附件2.xlsx::2023年统计的相关数据` 在 `rule:price-canonical-number`
+  验证失败后进入 attempt 1 Repair。
+- Repair 模型调用返回后，`validate_repair_scope` 拒绝其改变或删除既有失败规则
+  `rule:price-canonical-number`，任务在 `data_cleaning/schema` 有界终止。该次
+  E2E 证实初始规划修复有效，但暴露 Repair 对失败规则的允许修改范围与模型输出的
+  不兼容；未进入 QuestionPlan、Coder、Writer 或 DOCX 导出。
+- scorecard：
+  `fixtures/baseline/2024高教杯C题/scorecards/20260905-212110-ecd33559.json`；
+  trace：`logs/traces/20260905-212110-ecd33559.jsonl`。评分卡已与
+  `20260812-163504-32b726a1` 显式对比：`phase_fail=1`、总计 3 次 LLM
+  调用、35,207 tokens，`regression_check.all_pass=false`。M1 保持开启。
+
+## 2026-09-05 - 固定 Fixture E2E（初始 CleaningPlan 重规划耗尽）
+
+- task id：`20260905-223505-ba128b2b`；git revision：
+  `f03886c51ffce30f1e54e54a280f2cc15756a31f`，工作树和 M1 source 均为 dirty，
+  包含失败规则退役与 Repair 语义重规划的候选修复。fixture、模型配置和指纹与前两轮
+  相同：`2024高教杯C题`、四个 Agent `deepseek-v4-pro` / `openai-chat`、
+  配置指纹 `a27d3affa9302ccd`。
+- 运行前护栏：Cleaning 相关单测 31 passed；`make test-modeler` 为 37 passed；
+  `make check` 为 227 passed、1 skipped、1 deselected。
+- `task_facts`、`task_outline` 和 4 个输入 Sheet 的 `data_profile` 均通过。
+  初始 CleaningPlan 的第 1、2 次模型响应未通过本地 JSON/语义校验，触发仅包含
+  错误摘要的重规划；第 3 次模型响应在 JSON 对象中途结束，报
+  `Invalid JSON: EOF while parsing an object at line 129 column 37`。
+- 因此 `data_cleaning` 在 3 次初始规划预算耗尽后以 `schema` 终止，耗时
+  767,509 ms；没有产生 cleaned 表、DataContract、QuestionPlan、Coder/Writer
+  产物或 DOCX。这证明 Repair 退役路径尚未获得真实运行覆盖，当前阻塞点回到
+  初始 CleaningPlan 的真实模型输出稳定性。
+- scorecard：
+  `fixtures/baseline/2024高教杯C题/scorecards/20260905-223505-ba128b2b.json`；
+  trace：`logs/traces/20260905-223505-ba128b2b.jsonl`。评分卡已与
+  `20260812-163504-32b726a1` 显式对比：`phase_fail=1`、4 次 LLM 调用、
+  70,537 tokens、`regression_check.all_pass=false`。M1 保持开启。

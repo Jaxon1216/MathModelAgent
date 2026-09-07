@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
@@ -88,46 +87,56 @@ class CleaningPlannerAgent:
         """只依据 TaskOutline 和 DataProfile 生成完整清洗计划。"""
         if not profiles:
             return ()
-        proposal_set = await self._request_proposals(
-            [
-                {"role": "system", "content": get_cleaning_system_prompt()},
-                {
-                    "role": "user",
-                    "content": get_cleaning_request(outline, profiles),
-                },
-            ],
-            response_kind="set",
+        return await self._request_validated_plan_set(
+            outline,
+            profiles,
         )
-        assert isinstance(proposal_set, _PlanProposalSet)
 
-        profile_by_table = {profile.table_id: profile for profile in profiles}
-        proposal_ids = [proposal.table_id for proposal in proposal_set.plans]
-        if len(set(proposal_ids)) != len(proposal_ids):
-            raise CleaningPlanResponseError(("duplicate table_id",), attempts=1)
-        if set(proposal_ids) != set(profile_by_table):
-            raise CleaningPlanResponseError(
-                (
-                    "plans must exactly cover DataProfile tables: "
-                    f"expected={sorted(profile_by_table)}, "
-                    f"actual={sorted(proposal_ids)}",
-                ),
-                attempts=1,
-            )
+    async def _request_validated_plan_set(
+        self,
+        outline: TaskOutline,
+        profiles: tuple[DataProfile, ...],
+    ) -> tuple[CleaningPlan, ...]:
+        """在同一有限预算内修复 JSON 和计划语义错误。
 
-        plans: list[CleaningPlan] = []
-        try:
-            for profile in profiles:
-                proposal = next(
-                    item
-                    for item in proposal_set.plans
-                    if item.table_id == profile.table_id
+        Args:
+            outline: 当前经过校验的全局任务骨架。
+            profiles: 只读数据画像。
+
+        Returns:
+            逐表完整、通过 scope 校验的清洗计划。
+
+        Raises:
+            CleaningPlanResponseError: 有限次数后仍没有合法计划。
+        """
+        base_messages: list[ChatMessage] = [
+            {"role": "system", "content": get_cleaning_system_prompt()},
+            {
+                "role": "user",
+                "content": get_cleaning_request(outline, profiles),
+            },
+        ]
+        errors: tuple[str, ...] = ()
+        total_attempts = self._max_json_repair_attempts + 1
+        for _attempt in range(1, total_attempts + 1):
+            messages = list(base_messages)
+            if errors:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": get_cleaning_repair_prompt(errors),
+                    }
                 )
-                plan = _build_plan(outline, profile, proposal)
-                validate_cleaning_plan_scope(plan, profile)
-                plans.append(plan)
-        except (ValidationError, ValueError) as exc:
-            raise CleaningPlanResponseError((str(exc),), attempts=1) from exc
-        return tuple(plans)
+            raw_content = await self._client.complete(messages)
+            try:
+                proposal_set = _PlanProposalSet.model_validate_json(
+                    _strip_json_fence(raw_content)
+                )
+                return _build_validated_plan_set(outline, profiles, proposal_set)
+            except (ValidationError, ValueError) as exc:
+                errors = _validation_error_messages(exc)
+
+        raise CleaningPlanResponseError(errors, attempts=total_attempts)
 
     async def repair(
         self,
@@ -150,68 +159,48 @@ class CleaningPlannerAgent:
         if repair_attempt != current_plan.repair_attempt + 1:
             raise ValueError("repair_attempt 必须严格递增一次")
 
-        proposal = await self._request_proposals(
-            [
-                {"role": "system", "content": get_table_repair_system_prompt()},
-                {
-                    "role": "user",
-                    "content": get_table_repair_request(
-                        profile,
-                        current_plan,
-                        issues,
-                    ),
-                },
-            ],
-            response_kind="single",
+        return await self._request_validated_repair_plan(
+            profile,
+            current_plan,
+            issues,
+            repair_attempt=repair_attempt,
         )
-        assert isinstance(proposal, _PlanProposal)
-        if proposal.table_id != profile.table_id:
-            raise CleaningPlanResponseError(
-                ("Repair 返回了未授权 table_id",),
-                attempts=1,
-            )
 
-        outline_id = current_plan.task_outline_id
-        digest = _table_digest(profile.table_id)
-        issue_ids = tuple(issue.issue_id for issue in issues)
-        try:
-            repaired = CleaningPlan(
-                schema_version="m1.5",
-                artifact_id=f"cleaning-plan:{digest}-repair{repair_attempt}",
-                source_artifact_ids=(
-                    outline_id,
-                    profile.artifact_id,
-                    current_plan.artifact_id,
-                    *issue_ids,
-                ),
-                validation_status="validated",
-                artifact_path=(
-                    f"m15/cleaning_plans/{digest}.repair{repair_attempt}.json"
-                ),
-                task_outline_id=outline_id,
-                data_profile_id=profile.artifact_id,
-                table_id=profile.table_id,
-                operations=proposal.operations,
-                no_op_reason=proposal.no_op_reason,
-                repair_attempt=repair_attempt,
-                repaired_issue_ids=issue_ids,
-            )
-            validate_cleaning_plan_scope(repaired, profile)
-            validate_repair_scope(current_plan, repaired, issues)
-        except (ValidationError, ValueError) as exc:
-            raise CleaningPlanResponseError((str(exc),), attempts=1) from exc
-        return repaired
-
-    async def _request_proposals(
+    async def _request_validated_repair_plan(
         self,
-        base_messages: list[ChatMessage],
+        profile: DataProfile,
+        current_plan: CleaningPlan,
+        issues: tuple[DataIssue, ...],
         *,
-        response_kind: Literal["set", "single"],
-    ) -> _PlanProposalSet | _PlanProposal:
-        """每次重试都从固定事实上下文重建消息，不保留无效响应。"""
+        repair_attempt: int,
+    ) -> CleaningPlan:
+        """在同一有限预算内修复 Repair 的 JSON 和语义错误。
+
+        Args:
+            profile: 失败表的只读画像。
+            current_plan: 产生失败证据的当前计划。
+            issues: 与当前计划绑定的未解决失败证据。
+            repair_attempt: 当前严格递增的一次 Repair 编号。
+
+        Returns:
+            不扩张授权范围且通过 scope 校验的 Repair 计划。
+
+        Raises:
+            CleaningPlanResponseError: 有限次数后仍没有合法 Repair 计划。
+        """
+        base_messages: list[ChatMessage] = [
+            {"role": "system", "content": get_table_repair_system_prompt()},
+            {
+                "role": "user",
+                "content": get_table_repair_request(
+                    profile,
+                    current_plan,
+                    issues,
+                ),
+            },
+        ]
         errors: tuple[str, ...] = ()
         total_attempts = self._max_json_repair_attempts + 1
-        schema = _PlanProposalSet if response_kind == "set" else _PlanProposal
         for _attempt in range(1, total_attempts + 1):
             messages = list(base_messages)
             if errors:
@@ -223,15 +212,67 @@ class CleaningPlannerAgent:
                 )
             raw_content = await self._client.complete(messages)
             try:
-                return schema.model_validate_json(_strip_json_fence(raw_content))
-            except ValidationError as exc:
-                errors = tuple(
-                    f"{error['type']} "
-                    f"{'.'.join(str(item) for item in error['loc'])}: "
-                    f"{error['msg']}"
-                    for error in exc.errors()
+                proposal = _PlanProposal.model_validate_json(
+                    _strip_json_fence(raw_content)
                 )
+                if proposal.table_id != profile.table_id:
+                    raise ValueError("Repair 返回了未授权 table_id")
+                repaired = _build_repaired_plan(
+                    profile,
+                    current_plan,
+                    issues,
+                    proposal,
+                    repair_attempt=repair_attempt,
+                )
+                validate_cleaning_plan_scope(repaired, profile)
+                validate_repair_scope(current_plan, repaired, issues)
+                return repaired
+            except (ValidationError, ValueError) as exc:
+                errors = _validation_error_messages(exc)
         raise CleaningPlanResponseError(errors, attempts=total_attempts)
+
+
+def _build_validated_plan_set(
+    outline: TaskOutline,
+    profiles: tuple[DataProfile, ...],
+    proposal_set: _PlanProposalSet,
+) -> tuple[CleaningPlan, ...]:
+    """将模型提案转换为带可信元数据且通过 scope 校验的计划。"""
+    profile_by_table = {profile.table_id: profile for profile in profiles}
+    proposal_ids = [proposal.table_id for proposal in proposal_set.plans]
+    if len(set(proposal_ids)) != len(proposal_ids):
+        raise ValueError("plans 不能包含重复 table_id")
+    if set(proposal_ids) != set(profile_by_table):
+        raise ValueError(
+            "plans 必须严格覆盖 DataProfile tables: "
+            f"expected={sorted(profile_by_table)}, actual={sorted(proposal_ids)}"
+        )
+
+    plans: list[CleaningPlan] = []
+    for profile in profiles:
+        proposal = next(
+            item
+            for item in proposal_set.plans
+            if item.table_id == profile.table_id
+        )
+        plan = _build_plan(outline, profile, proposal)
+        validate_cleaning_plan_scope(plan, profile)
+        plans.append(plan)
+    return tuple(plans)
+
+
+def _validation_error_messages(
+    exc: ValidationError | ValueError,
+) -> tuple[str, ...]:
+    """压缩结构化校验错误，不回灌无效模型原文。"""
+    if isinstance(exc, ValidationError):
+        return tuple(
+            f"{error['type']} "
+            f"{'.'.join(str(item) for item in error['loc'])}: "
+            f"{error['msg']}"
+            for error in exc.errors()
+        )
+    return (str(exc),)
 
 
 def _build_plan(
@@ -252,6 +293,39 @@ def _build_plan(
         table_id=profile.table_id,
         operations=proposal.operations,
         no_op_reason=proposal.no_op_reason,
+    )
+
+
+def _build_repaired_plan(
+    profile: DataProfile,
+    current_plan: CleaningPlan,
+    issues: tuple[DataIssue, ...],
+    proposal: _PlanProposal,
+    *,
+    repair_attempt: int,
+) -> CleaningPlan:
+    """为 Repair 提案补入仅由本地事实决定的可信元数据。"""
+    outline_id = current_plan.task_outline_id
+    digest = _table_digest(profile.table_id)
+    issue_ids = tuple(issue.issue_id for issue in issues)
+    return CleaningPlan(
+        schema_version="m1.5",
+        artifact_id=f"cleaning-plan:{digest}-repair{repair_attempt}",
+        source_artifact_ids=(
+            outline_id,
+            profile.artifact_id,
+            current_plan.artifact_id,
+            *issue_ids,
+        ),
+        validation_status="validated",
+        artifact_path=f"m15/cleaning_plans/{digest}.repair{repair_attempt}.json",
+        task_outline_id=outline_id,
+        data_profile_id=profile.artifact_id,
+        table_id=profile.table_id,
+        operations=proposal.operations,
+        no_op_reason=proposal.no_op_reason,
+        repair_attempt=repair_attempt,
+        repaired_issue_ids=issue_ids,
     )
 
 
@@ -408,7 +482,15 @@ def validate_repair_scope(
     }
 
     for rule_id, current_condition in current_conditions.items():
-        if repaired_conditions.get(rule_id) != current_condition:
+        repaired_condition = repaired_conditions.get(rule_id)
+        if rule_id in failed_rule_ids:
+            if (
+                repaired_condition is not None
+                and repaired_condition != current_condition
+            ):
+                raise ValueError(f"Repair 不能重新定义失败规则定义: {rule_id}")
+            continue
+        if repaired_condition != current_condition:
             raise ValueError(f"Repair 不能改变或删除既有规则定义: {rule_id}")
 
     for operation_id, current_operation in current_by_id.items():
@@ -416,7 +498,7 @@ def validate_repair_scope(
             condition.rule_id for condition in current_operation.postconditions
         }
         if (
-            not operation_rules.intersection(failed_rule_ids)
+            not operation_rules.issubset(failed_rule_ids)
             and repaired_by_id.get(operation_id) != current_operation
         ):
             raise ValueError(f"Repair 修改了未失败规则对应操作: {operation_id}")
@@ -428,33 +510,16 @@ def validate_repair_scope(
         repaired_rules = {
             condition.rule_id for condition in repaired_operation.postconditions
         }
-        current_rules = (
-            {condition.rule_id for condition in current_operation.postconditions}
-            if current_operation is not None
-            else set()
-        )
-        if (
-            not repaired_rules
-            or not repaired_rules.intersection(failed_rule_ids)
-            or not (repaired_rules - current_rules).issubset(failed_rule_ids)
-        ):
+        if not repaired_rules.issubset(failed_rule_ids):
             raise ValueError(f"Repair 操作超出失败规则授权: {operation_id}")
+        if not repaired_rules.issubset(current_conditions):
+            raise ValueError(f"Repair 引入了未授权规则: {operation_id}")
         expected_targets = {
             current_targets_by_rule[rule_id]
             for rule_id in repaired_rules
-            if rule_id in current_targets_by_rule
         }
-        if expected_targets and expected_targets != {repaired_operation.target_columns}:
+        if expected_targets != {repaired_operation.target_columns}:
             raise ValueError(f"Repair 不能改变失败规则的目标列: {operation_id}")
-        for condition in repaired_operation.postconditions:
-            if condition.rule_id not in current_conditions:
-                issue = next(
-                    item for item in issues if item.rule_id == condition.rule_id
-                )
-                if condition.expected != issue.expected:
-                    raise ValueError(
-                        f"Repair 新增规则不得改变失败期望: {condition.rule_id}"
-                    )
 
     for operation_id, current_operation in current_by_id.items():
         if operation_id in repaired_by_id:

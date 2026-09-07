@@ -529,6 +529,92 @@ async def test_planner_rejects_cross_table_column_and_does_not_receive_work_dir(
 
 
 @pytest.mark.asyncio
+async def test_planner_repairs_scope_error_without_replaying_invalid_response(
+    tmp_path: Path,
+):
+    """合法 JSON 的 scope 错误也应进入有限 re-plan，而非直接终止。"""
+    (tmp_path / "catalog.csv").write_text(
+        "crop_id,crop_name,note\n1,wheat,keep\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "statistics.csv").write_text(
+        "crop_id,crop_name,yield\n1,wheat,10\n",
+        encoding="utf-8",
+    )
+    profiles = inspect_data_profiles(tmp_path, OUTLINE_ID)
+    catalog = next(profile for profile in profiles if profile.table_id == "catalog.csv")
+    invalid = {
+        "plans": [
+            {
+                "table_id": catalog.table_id,
+                "operations": [
+                    {
+                        "operation_id": "clean-op:normalize-catalog-note",
+                        "operation_type": "normalize_join_key",
+                        "target_columns": ["note"],
+                        "target_type": None,
+                        "strategy": None,
+                        "fill_value": None,
+                        "keep": None,
+                        "normalizations": ["strip"],
+                        "reason": "错误地把备注字段视为关联键。",
+                        "postconditions": [
+                            {
+                                "rule_id": "rule:note-string",
+                                "rule_type": "canonical_type",
+                                "columns": ["note"],
+                                "target_table_id": None,
+                                "target_columns": [],
+                                "operator": "eq",
+                                "expected": "string",
+                            }
+                        ],
+                    }
+                ],
+                "no_op_reason": None,
+            },
+            *[
+                {
+                    "table_id": profile.table_id,
+                    "operations": [],
+                    "no_op_reason": "无需清洗。",
+                }
+                for profile in profiles
+                if profile.table_id != catalog.table_id
+            ],
+        ]
+    }
+    valid = {
+        "plans": [
+            {
+                "table_id": profile.table_id,
+                "operations": [],
+                "no_op_reason": "画像满足约束。",
+            }
+            for profile in profiles
+        ]
+    }
+    client = FakeLLMClient(
+        [
+            json.dumps(invalid, ensure_ascii=False),
+            json.dumps(valid, ensure_ascii=False),
+        ]
+    )
+
+    plans = await CleaningPlannerAgent(
+        client,
+        max_json_repair_attempts=1,
+    ).plan(_outline(), profiles)
+
+    assert len(plans) == len(profiles)
+    assert len(client.messages) == 2
+    repair_prompt = client.messages[1][-1]["content"]
+    assert "normalize-catalog-note" in repair_prompt
+    assert "只能规范化画像声明的关联键" in repair_prompt
+    assert json.dumps(invalid, ensure_ascii=False) not in repair_prompt
+
+
+@pytest.mark.asyncio
 async def test_planner_json_repair_is_bounded_and_stateless(tmp_path: Path):
     """格式修复只重用可信输入和错误摘要，不回灌无效模型正文。"""
     (tmp_path / "input.csv").write_text("id,value\n1,10\n", encoding="utf-8")
@@ -597,6 +683,100 @@ async def test_repair_rejects_other_table_plan(tmp_path: Path):
             client,
             max_json_repair_attempts=0,
         ).repair(first, current, (issue,), repair_attempt=1)
+
+
+@pytest.mark.asyncio
+async def test_repair_replans_semantic_scope_error_without_replaying_invalid_response(
+    tmp_path: Path,
+):
+    """Repair 的 scope 错误也在本地有限预算内重试。"""
+    (tmp_path / "input.csv").write_text(
+        "price\n2.50-4.00\n",
+        encoding="utf-8",
+    )
+    (profile,) = inspect_data_profiles(tmp_path, OUTLINE_ID)
+    current = _plan(
+        profile,
+        (
+            CleaningOperation(
+                operation_id="clean-op:cast-price-number",
+                operation_type="cast_type",
+                target_columns=("price",),
+                target_type="number",
+                strategy="strict",
+                reason="错误地假定价格区间均可直接转换为数值。",
+                postconditions=(
+                    _expectation(
+                        "rule:price-canonical-number",
+                        "canonical_type",
+                        columns=("price",),
+                        expected="number",
+                    ),
+                ),
+            ),
+        ),
+    )
+    issue = DataIssue(
+        schema_version="m1.5",
+        artifact_id="data-issue:price-canonical-number",
+        source_artifact_ids=(profile.artifact_id, current.artifact_id),
+        validation_status="validated",
+        artifact_path="m15/issues/price-canonical-number.json",
+        issue_id="data-issue:price-canonical-number",
+        table_id=profile.table_id,
+        rule_id="rule:price-canonical-number",
+        expected="number",
+        actual="ValueError: Unable to parse price range",
+        evidence_summary="价格区间不能按严格数值转换。",
+        repair_attempt=0,
+        status="unresolved",
+    )
+    invalid = {
+        "table_id": profile.table_id,
+        "operations": [
+            {
+                "operation_id": "clean-op:cast-price-number",
+                "operation_type": "cast_type",
+                "target_columns": ["price"],
+                "target_type": "string",
+                "strategy": "strict",
+                "reason": "错误地重新定义失败规则。",
+                "postconditions": [
+                    {
+                        "rule_id": "rule:price-canonical-number",
+                        "rule_type": "canonical_type",
+                        "columns": ["price"],
+                        "operator": "eq",
+                        "expected": "string",
+                    }
+                ],
+            }
+        ],
+        "no_op_reason": None,
+    }
+    valid = {
+        "table_id": profile.table_id,
+        "operations": [],
+        "no_op_reason": "价格区间不能由白名单操作安全转换，保留原始字符串供下游显式处理。",
+    }
+    client = FakeLLMClient(
+        [
+            json.dumps(invalid, ensure_ascii=False),
+            json.dumps(valid, ensure_ascii=False),
+        ]
+    )
+
+    repaired = await CleaningPlannerAgent(
+        client,
+        max_json_repair_attempts=1,
+    ).repair(profile, current, (issue,), repair_attempt=1)
+
+    assert repaired.operations == ()
+    assert repaired.no_op_reason == valid["no_op_reason"]
+    assert len(client.messages) == 2
+    repair_prompt = client.messages[1][-1]["content"]
+    assert "不能重新定义失败规则" in repair_prompt
+    assert json.dumps(invalid, ensure_ascii=False) not in repair_prompt
 
 
 def test_verifier_rechecks_cross_table_relation_values(tmp_path: Path):

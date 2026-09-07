@@ -56,6 +56,8 @@ no_op_reason；有操作时 no_op_reason 必须为 null。
 - drop_empty_rows：strategy="strict"，仅删除 target_columns 全部缺失的行。
 - drop_duplicates：只按 target_columns 去重，keep 只能是 first/last。
 - normalize_join_key：normalizations 只能按顺序选 strip/casefold/unicode_nfkc/collapse_whitespace。
+  target_columns 必须与当前 DataProfile.join_evidence 中某一条 source_columns 完全一致。
+  不得把多条关联证据中的字段合并为同一次操作，也不得规范化仅名称看似关联的字段。
 
 每项操作必须有 reason 和至少一个可机器验证的 postcondition。只可引用当前表
 字段；join_compatible 的目标必须来自 DataProfile.join_evidence。禁止声明任何
@@ -95,7 +97,11 @@ def get_table_repair_system_prompt() -> str:
     return (
         get_cleaning_system_prompt()
         + "\n\n当前请求是局部 Repair。只输出一个 plan 对象，不要输出 plans 包装。"
-        "只能修改失败 rule_id 对应的操作；未失败操作必须逐项原样保留。"
+        "未失败操作及其规则必须逐项原样保留。"
+        "若一个失败操作无法由白名单安全修复，可删除该操作及其失败规则；"
+        "不要复用或重新定义已删除的失败 rule_id。"
+        "保留失败 rule_id 时，其规则定义和目标列也必须原样保留。"
+        "只能修改仅包含失败规则的操作。"
         "禁止引用或修改其他表。"
     )
 

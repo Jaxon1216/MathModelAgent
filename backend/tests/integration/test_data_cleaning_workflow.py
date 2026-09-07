@@ -189,6 +189,49 @@ class RepairPlanner:
         )
 
 
+class RetiringRepairPlanner(RepairPlanner):
+    """以显式 no-op 退役无法由白名单安全修复的失败规则。"""
+
+    async def repair(
+        self,
+        profile,
+        current_plan,
+        issues,
+        *,
+        repair_attempt,
+    ):
+        """保留原始失败证据，将失败操作从当前计划中移除。"""
+        self.repairs.append(
+            (
+                profile.table_id,
+                tuple(issue.rule_id for issue in issues),
+                repair_attempt,
+            )
+        )
+        digest = profile.artifact_id.removeprefix("data-profile:")
+        return CleaningPlan(
+            schema_version="m1.5",
+            artifact_id=f"cleaning-plan:{digest}-repair{repair_attempt}",
+            source_artifact_ids=(
+                OUTLINE_ID,
+                profile.artifact_id,
+                current_plan.artifact_id,
+                *(issue.issue_id for issue in issues),
+            ),
+            validation_status="validated",
+            artifact_path=(
+                f"m15/cleaning_plans/{digest}.repair{repair_attempt}.json"
+            ),
+            task_outline_id=OUTLINE_ID,
+            data_profile_id=profile.artifact_id,
+            table_id=profile.table_id,
+            operations=(),
+            no_op_reason="白名单操作无法安全修复，保留原始值供下游显式处理。",
+            repair_attempt=repair_attempt,
+            repaired_issue_ids=tuple(issue.issue_id for issue in issues),
+        )
+
+
 class CancellingRepairPlanner(RepairPlanner):
     """在已有失败证据落盘后模拟用户取消。"""
 
@@ -379,6 +422,30 @@ async def test_single_table_repair_succeeds_and_preserves_issue_evidence(
         if event == "data_cleaning.repair.issue"
     )
     assert repair_issue["issue_attempt"] == 0
+
+
+@pytest.mark.asyncio
+async def test_repair_retirement_preserves_failure_evidence_without_claiming_pass(
+    tmp_path: Path,
+):
+    """无法安全修复时可退役失败规则，且 evidence 不伪称原规则已经通过。"""
+    (tmp_path / "input.csv").write_text(
+        "group,value\n,1\nA,2\n",
+        encoding="utf-8",
+    )
+    (profile,) = inspect_data_profiles(tmp_path, OUTLINE_ID)
+    planner = RetiringRepairPlanner(_initial_plan(profile), succeeds=False)
+
+    result = await DataCleaningWorkflow(planner).run(
+        work_dir=tmp_path,
+        outline=_outline(),
+        profiles=(profile,),
+    )
+
+    assert result.plans[0].operations == ()
+    assert [issue.status for issue in result.issues] == ["unresolved", "resolved"]
+    assert result.issues[-1].actual == "retired"
+    assert "安全退役" in result.issues[-1].evidence_summary
 
 
 @pytest.mark.asyncio
@@ -675,3 +742,52 @@ def test_repair_scope_rejects_reinterpreted_failed_rule(tmp_path: Path):
 
     with pytest.raises(ValueError, match="规则定义"):
         validate_repair_scope(current, repaired, (issue,))
+
+
+def test_repair_scope_allows_removing_exclusively_failed_operation(
+    tmp_path: Path,
+):
+    """无法安全执行的失败操作可被删除，避免把无效规则带入下一轮。"""
+    (tmp_path / "input.csv").write_text(
+        "group,value\n,1\nA,2\n",
+        encoding="utf-8",
+    )
+    (profile,) = inspect_data_profiles(tmp_path, OUTLINE_ID)
+    current = _initial_plan(profile)
+    issue = DataIssue(
+        schema_version="m1.5",
+        artifact_id="data-issue:removable-rule",
+        source_artifact_ids=(profile.artifact_id, current.artifact_id),
+        validation_status="validated",
+        artifact_path="m15/issues/removable-rule.json",
+        issue_id="data-issue:removable-rule",
+        table_id=profile.table_id,
+        rule_id="rule:group-non-null",
+        expected=0,
+        actual="TableCleaningError",
+        evidence_summary="当前白名单操作无法安全修复该缺失。",
+        repair_attempt=0,
+        status="unresolved",
+    )
+    digest = profile.artifact_id.removeprefix("data-profile:")
+    repaired = CleaningPlan(
+        schema_version="m1.5",
+        artifact_id=f"cleaning-plan:{digest}-repair1",
+        source_artifact_ids=(
+            OUTLINE_ID,
+            profile.artifact_id,
+            current.artifact_id,
+            issue.issue_id,
+        ),
+        validation_status="validated",
+        artifact_path=f"m15/cleaning_plans/{digest}.repair1.json",
+        task_outline_id=OUTLINE_ID,
+        data_profile_id=profile.artifact_id,
+        table_id=profile.table_id,
+        operations=(),
+        no_op_reason="白名单操作无法安全修复，保留原始值供下游处理。",
+        repair_attempt=1,
+        repaired_issue_ids=(issue.issue_id,),
+    )
+
+    validate_repair_scope(current, repaired, (issue,))

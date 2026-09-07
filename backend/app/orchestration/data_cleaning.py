@@ -641,12 +641,22 @@ class DataCleaningWorkflow:
         store: M15ArtifactStore,
         evidence: list[DataIssue],
     ) -> None:
-        """验证通过后为历史失败规则追加 resolved 终态证据。"""
+        """验证通过后为历史失败规则追加可审计的 resolved 终态证据。"""
         latest_by_rule: dict[str, DataIssue] = {}
         for issue in unresolved:
             latest_by_rule[issue.rule_id] = issue
+        active_rule_ids = {
+            condition.rule_id
+            for operation in plan.operations
+            for condition in operation.postconditions
+        }
         for issue in latest_by_rule.values():
-            resolved = _build_resolved_issue(profile, plan, issue)
+            resolved = _build_resolved_issue(
+                profile,
+                plan,
+                issue,
+                retired=issue.rule_id not in active_rule_ids,
+            )
             store.write_json(resolved)
             evidence.append(resolved)
 
@@ -688,8 +698,10 @@ def _build_resolved_issue(
     profile: DataProfile,
     plan: CleaningPlan,
     unresolved: DataIssue,
+    *,
+    retired: bool,
 ) -> DataIssue:
-    """追加而非覆盖原失败证据，表明同一规则最终通过。"""
+    """追加而非覆盖原失败证据，区分规则通过和安全退役。"""
     identity = (
         f"{profile.table_id}\0{unresolved.rule_id}\0{plan.repair_attempt}\0resolved"
     ).encode("utf-8")
@@ -709,9 +721,12 @@ def _build_resolved_issue(
         table_id=profile.table_id,
         rule_id=unresolved.rule_id,
         expected=unresolved.expected,
-        actual="passed",
+        actual="retired" if retired else "passed",
         evidence_summary=(
-            f"规则在第 {plan.repair_attempt} 次 Repair 后通过全部表级验证。"
+            f"失败规则在第 {plan.repair_attempt} 次 Repair 后已安全退役；"
+            "其对应操作未进入当前 CleaningPlan，原始值按当前 DataContract 交给下游显式处理。"
+            if retired
+            else f"规则在第 {plan.repair_attempt} 次 Repair 后通过全部表级验证。"
         ),
         repair_attempt=plan.repair_attempt,
         status="resolved",
